@@ -24,14 +24,14 @@
 typedef struct OSTaskControlBlock
 {
     /* Pointer to last element pushed to stack */
-    volatile StackType_t *stack_pointer;
+    volatile StackType_t *stack_top;
 
     /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
     uint8_t is_static;
 
     TaskPrio_t priority;
     StackType_t stack_start;
-    StackType_t stack_top;
+    StackType_t stack_end;
     int stack_size;
     char * task_name;
 
@@ -71,9 +71,6 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
     if(task_stack == null) {
         return -1;
     }
-    for(i = 0; i < stack_size; ++i) {
-        // TODO: clear the stack. set everything to 0.
-    }
 
     task_tcb = ( TCB_t * ) pvPortMallocTcbMem( sizeof( TCB_t ) );
     if(task_tcb == null){
@@ -86,6 +83,10 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
     if(msg_queue_size > 0) {
         /* TODO */
     }
+
+    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE);
+    _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
+
     return 0;
 }
 
@@ -94,10 +95,51 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
  */
 int OS_task_create_s();
 
-void _OS_task_init_tcb(TCB *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
+void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
         uint8_t is_static)
 {
-    tcb->
+    tcb->is_static = is_static;
+    tcb->priority = prio;
+    tcb->task_name = task_name;
+}
+
+void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
+        TaskFunc_t task_func, void *task_arg, TaskPrio_t prio)
+{
+    StackType_t stack_top;
+    StackType_t stack_end;
+    uint8_t run_privileged;
+
+    #if( portUSING_MPU_WRAPPERS == 1) {
+        if((prio & OS_PRIVILEGE_BIT) != 0U) {
+            run_privileged = OS_TRUE;
+        } else {
+            run_privileged = OS_FALSE;
+        }
+        prio &= ~OS_PRIVILEGE_BIT;
+    }
+    #endif /* portUSING_MPU_WRAPPERS */
+
+    tcb->stack_start = stack_alloc;
+    
+    /* Zero out the stack. Debugging bits can replace the 0's later */
+    memset(tcb->stack_start, (int)0x00, (size_t)(stack_size * sizeof(StackType_t)));
+
+    /* TODO: Again here we assume the stack grows downwards */
+    /* TODO: Stolen from FreeRTOS */
+    /* TODO: I want to make this a macro in the future? */
+    stack_top = tcb->stack_start + (stack_size - (uint32_t) 1);
+    stack_top = (Stacktype_t *)(((portPOINTER_SIZE_TYPE) stack_top) & ( ~((portPOINTER_SIZE_TYPE) portBYTE_ALIGNMENT_MASK)));
+    tcb->stack_end = stack_top;
+
+    #if( portUsing_MPU_WRAPPERS == 1) {
+        tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg, run_privileged);
+    }
+    #else {
+        tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg);
+    }
+    #endif /* portUsing_MPU_WRAPPERS */
+
 }
 
 void OS_task_destroy();
