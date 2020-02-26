@@ -29,11 +29,17 @@ typedef struct OSTaskControlBlock
     /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
     uint8_t is_static;
 
+    /* The core being used for multi-core systems */
+    int core_ID;
+
     TaskPrio_t priority;
     StackType_t stack_start;
     StackType_t stack_end;
     int stack_size;
     char * task_name;
+
+    /* IPC data */
+    int msg_queue_size;
 
 } TCB_t;
 
@@ -47,12 +53,13 @@ typedef struct OSTaskControlBlock
  * prop - The priority of the task (0-255)
  * stack_size - Size of the stack. Measured in *WORDS*
  * msg_queue_size - ipc message queue size for this task. Can be 0 or negative for no queue. Measured in messages
+ * core_ID - The core being used for multicore systems
  * task_tcb - area to allocate tcb. Can be null
  * 
  * Return - Error code for task creation, or 0 if no error occured
  */
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name, 
-            TaskPrio_t prio, int stack_size, int msg_queue_size, TCB_t *task_tcb)
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb)
 {
     int i;
     StackType_t *task_stack = null;
@@ -84,8 +91,9 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
         /* TODO */
     }
 
-    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE);
+    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID);
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
+    _OS_task_make_ready(task_tcb);
 
     return 0;
 }
@@ -95,15 +103,17 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
  */
 int OS_task_create_s();
 
-void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
-        uint8_t is_static)
+static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
+        uint8_t is_static, int core_ID, int msg_queue_size)
 {
     tcb->is_static = is_static;
     tcb->priority = prio;
     tcb->task_name = task_name;
+    tcb->core_ID = core_ID;
+    tcb->msg_queue_size = msg_queue_size;
 }
 
-void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
+static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
         TaskFunc_t task_func, void *task_arg, TaskPrio_t prio)
 {
     StackType_t stack_top;
@@ -139,6 +149,11 @@ void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc,
         tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg);
     }
     #endif /* portUsing_MPU_WRAPPERS */
+
+}
+
+static void _OS_task_make_ready(TCB_t tcb, int core_ID)
+{
 
 }
 
