@@ -15,33 +15,6 @@
 #include "include/verios.h"
 #include "../cpu/xtensa/portmacro.h"
 
-/**
- * The Task Control Block
- * Kernel bookkeeping on each task created
- * 
- * Should NEVER be used by user code
- */
-typedef struct OSTaskControlBlock
-{
-    /* Pointer to last element pushed to stack */
-    volatile StackType_t *stack_top;
-
-    /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
-    uint8_t is_static;
-
-    /* The core being used for multi-core systems */
-    int core_ID;
-
-    TaskPrio_t priority;
-    StackType_t stack_start;
-    StackType_t stack_end;
-    int stack_size;
-    char * task_name;
-
-    /* IPC data */
-    int msg_queue_size;
-
-} TCB_t;
 
 /**
  * OS_task_create
@@ -93,7 +66,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
 
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID);
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
-    _OS_task_make_ready(task_tcb);
+    _OS_task_make_ready(task_tcb, core_ID);
 
     return 0;
 }

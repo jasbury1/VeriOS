@@ -9,6 +9,34 @@
  #include <limits.h>
  #include <stdint.h>
 
+/**
+ * The Task Control Block
+ * Kernel bookkeeping on each task created
+ * 
+ * Should NEVER be used by user code
+ */
+typedef struct OSTaskControlBlock
+{
+    /* Pointer to last element pushed to stack */
+    volatile StackType_t *stack_top;
+
+    /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
+    uint8_t is_static;
+
+    /* The core being used for multi-core systems */
+    int core_ID;
+
+    TaskPrio_t priority;
+    StackType_t stack_start;
+    StackType_t stack_end;
+    int stack_size;
+    char * task_name;
+
+    /* IPC data */
+    int msg_queue_size;
+
+} TCB_t;
+
 /* Specity the size of the integer for a task priority */
 typedef uint8_t TaskPrio_t;
 
