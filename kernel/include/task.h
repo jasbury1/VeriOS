@@ -35,6 +35,8 @@ typedef struct OSTaskControlBlock
     /* IPC data */
     int msg_queue_size;
 
+    int mutexes_held;
+
 } TCB_t;
 
 /* Specity the size of the integer for a task priority */

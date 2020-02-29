@@ -84,6 +84,7 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio
     tcb->task_name = task_name;
     tcb->core_ID = core_ID;
     tcb->msg_queue_size = msg_queue_size;
+    tcb->mutexes_held = 0;
 }
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
