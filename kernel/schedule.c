@@ -17,7 +17,7 @@
 #include "include/verios.h"
 #include "../cpu/xtensa/portmacro.h"
 
-PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[ portNUM_PROCESSORS ] = { NULL };
+PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
 
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
 PRIVILEGED_DATA static volatile uint8_t scheduler_running = OS_FALSE;
@@ -119,7 +119,17 @@ void _OS_schedule_ready_list_init(void)
  */
 void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
 {
+    /* If this is the first task in this priority bracket */
+    int prio = new_tcb->priority;
 
+    if(OS_ready_list[prio].head_ptr == NULL){
+        OS_ready_list[prio].head_ptr = new_tcb;
+        OS_ready_list[prio].tail_ptr = new_tcb;
+        return;
+    }
+    OS_ready_list[prio].tail_ptr.next_ptr = new_tcb;
+    new_tcb->tail_ptr = OS_ready_list[prio].tail_ptr;
+    OS_ready_list[prio].tail_ptr = new_tcb;
 }
 
 /**
@@ -139,16 +149,42 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
         core_ID = xPortGetCoreID();
     }
 
+    /* If nothing is running on this core then put dat task there */
+    if(OS_current_tcb[core_ID] == NULL ) {
+		
+        OS_current_tcb[core_ID] = pxNewTCB;
+		
+        if(OS_num_tasks) == 1){
+			/* TODO : prvInitialiseTaskLists(); */
+		}
+    }
+    /* Make this task the current if its priority is the highest and the scheduler isn't running */
+    else if(scheduler_running == OS_FALSE{
+        if(OS_current_tcb[core_ID] == NULL || OS_current_tcb[coreID]->priority <= new_tcb->priority) {
+            OS_current_tcb[core_ID] = new_tcb;
+        }
+    }
+    
     /* Increase the task count and update the ready list and priority bitmap */
     ++OS_num_tasks;
     _OS_schedule_add_prio(new_tcb->priority);
     _OS_schedule_ready_list_insert(new_tcb);
 
     if(scheduler_running == OS_FALSE) {
-        /* TODO refer to line 1175 in task.c freeRTOS */
         portEXIT_CRITICAL(&OS_schedule_mutex)
         return;
     }
+
+	/* Scheduler is running. Check to see if we should run it now */
+	if(OS_current_tcb[core_ID] == NULL || OS_current_tcb[core_ID]->priority < new_tcb->priority) {
+		if( core_ID == xPortGetCoreID() )
+		{
+			portYIELD_WITHIN_API();
+		}
+		else {
+			/* TODO : taskYIELD_OTHER_CORE(core_ID, new_tcb->priority); */
+		}
+	}
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
 }
@@ -158,5 +194,5 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
  */
 void OS_schedule_update(void)
 {
-    
+
 }

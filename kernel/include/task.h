@@ -39,6 +39,10 @@ typedef struct OSTaskControlBlock
 
     int mutexes_held;
 
+    /* List data */
+    TCB_t *next_ptr;
+    TCB_t *prev_ptr;
+
 } TCB_t;
 
 /* Specity the size of the integer for a task priority */
