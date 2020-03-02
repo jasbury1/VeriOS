@@ -9,6 +9,8 @@
  #include <limits.h>
  #include <stdint.h>
 
+ #define CORE_NO_AFFINITY -1
+
 /**
  * The Task Control Block
  * Kernel bookkeeping on each task created
