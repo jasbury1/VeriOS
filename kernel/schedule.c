@@ -111,5 +111,7 @@ void _OS_schedule_init_ready_list(void){
 /**
  */
 void OS_schedule_ready_list_insert(TCB_t new_tcb, int core_ID){
-    
+   portENTER_CRITICAL(&OS_schedule_mutex);
+   ++OS_num_tasks;
+   _OS_schedule_add_prio(new_tcb->priority);
 }
