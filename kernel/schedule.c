@@ -140,6 +140,12 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
 {
     /* TODO : Ensure that the coreID is not invalid / out of range */
     portENTER_CRITICAL(&OS_schedule_mutex);
+
+    /* Do the setup for the ready lists if this is the first task */
+    if(OS_num_tasks == 0){
+        _OS_schedule_reset_prio_map();
+        _OS_schedule_ready_list_init();
+    }
     
     /* If there is no affinity with which core it is placed on */
     if(core_ID == CORE_NO_AFFINITY) {
@@ -151,15 +157,11 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
 
     /* If nothing is running on this core then put dat task there */
     if(OS_current_tcb[core_ID] == NULL ) {
-		
         OS_current_tcb[core_ID] = pxNewTCB;
-		
-        if(OS_num_tasks) == 1){
-			/* TODO : prvInitialiseTaskLists(); */
-		}
     }
+
     /* Make this task the current if its priority is the highest and the scheduler isn't running */
-    else if(scheduler_running == OS_FALSE{
+    else if(scheduler_running == OS_FALSE){
         if(OS_current_tcb[core_ID] == NULL || OS_current_tcb[coreID]->priority <= new_tcb->priority) {
             OS_current_tcb[core_ID] = new_tcb;
         }
@@ -175,14 +177,15 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
         return;
     }
 
-	/* Scheduler is running. Check to see if we should run it now */
+	/* Scheduler is running. Check to see if we should run the task now */
 	if(OS_current_tcb[core_ID] == NULL || OS_current_tcb[core_ID]->priority < new_tcb->priority) {
 		if( core_ID == xPortGetCoreID() )
 		{
 			portYIELD_WITHIN_API();
 		}
 		else {
-			/* TODO : taskYIELD_OTHER_CORE(core_ID, new_tcb->priority); */
+            /* See if we need to interrupt the other core to run the task now */
+            vPortYieldOtherCore(core_ID);
 		}
 	}
 
