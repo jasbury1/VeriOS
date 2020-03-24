@@ -11,6 +11,8 @@
 
  #define CORE_NO_AFFINITY -1
 
+ #define OS_IDLE_STACK_SIZE configIDLE_TASK_SIZE
+
 /**
  * The Task Control Block
  * Kernel bookkeeping on each task created
@@ -42,6 +44,7 @@ typedef struct OSTaskControlBlock
     /* List data */
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
+
 
 } TCB_t;
 

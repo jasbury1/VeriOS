@@ -44,8 +44,6 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
         /* TODO: Better error code */
     }
     
-    /* TODO: We assume the stack grows downwards only. Option later on? */
-
     /* Allocate Stack first so that TCB does not interact with stack memory */
 	task_stack = ( StackType_t * ) pvPortMallocStackMem( ( ( ( size_t ) usStackDepth ) * sizeof( StackType_t ) ) );
     if(task_stack == null) {
@@ -64,7 +62,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
         /* TODO */
     }
 
-    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID);
+    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID, msg_queue_size);
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
     _OS_task_make_ready(task_tcb, core_ID);
 
@@ -130,9 +128,10 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
 
 }
 
-static void _OS_task_make_ready(TCB_t tcb, int core_ID)
+static void _OS_task_make_ready(TCB_t *tcb, int core_ID)
 {
-
+    /* TODO: Remove this function if it doesn't do anything besides call the other one */
+    OS_add_task_to_ready_list(tcb, core_ID);
 }
 
 void OS_task_destroy();

@@ -20,9 +20,12 @@
 PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
 
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
-PRIVILEGED_DATA static volatile uint8_t scheduler_running = OS_FALSE;
+PRIVILEGED_DATA static volatile uint8_t OS_scheduler_running = OS_FALSE;
+PRIVILEGED_DATA static volatile TickType_t xTickCount = ( TickType_t ) 0;
 
 PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED
+
+PRIVILEGED_DATA static TCB_t OS_idle_tcb_list[portNUM_PROCESSORS] = {NULL};
 
 /**
  * Bitmap of priorities in use.
@@ -39,7 +42,17 @@ static uint8_t OS_ready_priorities_map[OS_PRIO_MAP_SIZE];
  */
 static ReadyList_t OS_ready_list[OS_MAX_PRIORITIES];
 
+/**
+ * The IDLE Task
+ * TODO: Rewrite and move into Task.c
+ */
+static portTASK_FUNCTION(OS_idle_task, idle_task_params)
+{
+    (void) idle_task_params;
+    for(;;) {
 
+    }
+}
 
 /**
  * Zeros out the bit map storing priorities that are in use
@@ -161,7 +174,7 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
     }
 
     /* Make this task the current if its priority is the highest and the scheduler isn't running */
-    else if(scheduler_running == OS_FALSE){
+    else if(OS_scheduler_running == OS_FALSE){
         if(OS_current_tcb[core_ID] == NULL || OS_current_tcb[coreID]->priority <= new_tcb->priority) {
             OS_current_tcb[core_ID] = new_tcb;
         }
@@ -172,7 +185,7 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
     _OS_schedule_add_prio(new_tcb->priority);
     _OS_schedule_ready_list_insert(new_tcb);
 
-    if(scheduler_running == OS_FALSE) {
+    if(OS_scheduler_running == OS_FALSE) {
         portEXIT_CRITICAL(&OS_schedule_mutex)
         return;
     }
@@ -192,10 +205,41 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
     portEXIT_CRITICAL(&OS_schedule_mutex);
 }
 
-/**
- * 
- */
-void OS_schedule_update(void)
+void OS_schedule_start(void)
+{
+    int i;
+    int ret_val;
+
+    for(i = 0; i < portNUM_PROCESSORS; ++i) {
+        ret_val = OS_task_create(OS_idle_task, (void *)NULL, "IDLE", 0, OS_IDLE_STACK_SIZE, 0, i, &OS_idle_tcb_list[i]);
+        if(ret_val != 0){
+            /* TODO Handle error */
+        }
+    }
+    ret_val = xTimerCreateTimerTask();
+    if(ret_val != 1){
+        /* TODO Handle error */
+    }
+
+    portDISABLE_INTERRUPTS();
+    xTickCount = ( TickType_t ) 0U;
+    portCONFIGURE_TIMER_FOR_RUN_TIME_STATS();
+    OS_scheduler_running = OS_TRUE;
+
+    if (xPortStartScheduler() != OS_FALSE) {
+        /* Should not reach here as if the scheduler is running the
+			function will not return. */
+    }
+    else {
+        /* Should only reach here if a task calls xTaskEndScheduler(). */
+    }
+}
+
+void OS_schedule_stop()
 {
 
+}
+
+void OS_schedule_update(void)
+{
 }
