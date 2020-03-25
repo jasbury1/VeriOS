@@ -1,8 +1,3 @@
-/**
- * 
- * 
- */
- 
 #ifndef OS_SCHEDULE_H
 #define OS_SCHEDULE_H
 
@@ -15,5 +10,21 @@ typedef struct OSReadyListHeader {
     TCB_t *head_ptr;
     TCB_t *tail_ptr;
 } ReadyList_t;
+
+/**
+ * FUNCTION HEADERS
+ */
+
+void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID);
+
+void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
+
+void OS_schedule_start(void);
+
+void OS_schedule_stop(void);
+
+void OS_schedule_update(void);
+
+TCB_t* OS_schedule_get_idle_tcb(int core_ID);
 
 #endif /* OS_SCHEDULE_H */ 

@@ -1,20 +1,49 @@
+
+
+/* Standard includes. */
+#include <stdlib.h>
+#include <string.h>
+#include "sdkconfig.h"
+
+/* Defining MPU_WRAPPERS_INCLUDED_FROM_API_FILE prevents task.h from redefining
+all the API functions to use the MPU wrappers.  That should only be done when
+task.h is included from an application file. */
+#define MPU_WRAPPERS_INCLUDED_FROM_API_FILE
+#include "esp_newlib.h"
+#include "esp_compiler.h"
+
+/* FreeRTOS includes. */
+#include "verios.h"
+#include "task.h"
+#include "schedule.h"
+#include "timers.h"
+#include "StackMacros.h"
+#include "portmacro.h"
+#include "portmacro_priv.h"
+#include "semphr.h"
+
+/* Lint e961 and e750 are suppressed as a MISRA exception justified because the
+MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined for the
+header files above, but not in this file, in order to generate the correct
+privileged Vs unprivileged linkage and placement. */
+#undef MPU_WRAPPERS_INCLUDED_FROM_API_FILE /*lint !e961 !e750. */
+
+/*
+ * Defines the size, in bytes, of the stack allocated to the idle task.
+ */
+#define tskIDLE_STACK_SIZE	configIDLE_TASK_STACK_SIZE
+
 /**
- * 
- * HEADER GOES HERE- make it look cool later
- *
- *
- *
- *
+ * STATIC FUNCTION DECLARATIONS
  */
 
-/* Standard includes */
-#include <stdlib.h>
+static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
+        uint8_t is_static, int core_ID, int msg_queue_size);
 
-/* OS specific includes */
-#include "include/task.h"
-#include "include/verios.h"
-#include "../cpu/xtensa/portmacro.h"
+static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
+        TaskFunc_t task_func, void *task_arg, TaskPrio_t prio);
 
+static void _OS_task_make_ready(TCB_t *tcb, int core_ID);
 
 /**
  * OS_task_create
@@ -69,10 +98,22 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
     return 0;
 }
 
-/*
- * The static counterpart to OS_task_create
+/**
+ * 
  */
-int OS_task_create_s();
+int OS_task_delete(TCB_t *tcb)
+{
+	int tcb_core_ID = tcb->core_ID;
+	int current_core = xPortGetCoreID();
+
+	/* Cannot delete the idle task */
+	if(tcb == OS_schedule_get_idle_tcb(tcb_core_ID)){
+		return -1;
+	}
+
+	/* IF TCB IS NULL */
+
+}
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
         uint8_t is_static, int core_ID, int msg_queue_size)
@@ -133,13 +174,5 @@ static void _OS_task_make_ready(TCB_t *tcb, int core_ID)
     /* TODO: Remove this function if it doesn't do anything besides call the other one */
     OS_add_task_to_ready_list(tcb, core_ID);
 }
-
-void OS_task_destroy();
-
-void OS_task_change_priority();
-
-void OS_task_suspend();
-
-void OS_task_resume();
 
 

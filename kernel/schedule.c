@@ -1,21 +1,37 @@
-/**
- * 
- * HEADER GOES HERE- make it look cool later
- *
- *
- *
- *
+
+
+/* Standard includes. */
+#include <stdlib.h>
+#include <string.h>
+#include "sdkconfig.h"
+
+/* Defining MPU_WRAPPERS_INCLUDED_FROM_API_FILE prevents task.h from redefining
+all the API functions to use the MPU wrappers.  That should only be done when
+task.h is included from an application file. */
+#define MPU_WRAPPERS_INCLUDED_FROM_API_FILE
+#include "esp_newlib.h"
+#include "esp_compiler.h"
+
+/* FreeRTOS includes. */
+#include "verios.h"
+#include "task.h"
+#include "schedule.h"
+#include "timers.h"
+#include "StackMacros.h"
+#include "portmacro.h"
+#include "portmacro_priv.h"
+#include "semphr.h"
+
+/* Lint e961 and e750 are suppressed as a MISRA exception justified because the
+MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined for the
+header files above, but not in this file, in order to generate the correct
+privileged Vs unprivileged linkage and placement. */
+#undef MPU_WRAPPERS_INCLUDED_FROM_API_FILE /*lint !e961 !e750. */
+
+/*
+ * Defines the size, in bytes, of the stack allocated to the idle task.
  */
 
-/* Standard includes */
-#include <stdlib.h>
-#include <stdint.h>
-
-/* OS specific includes */
-#include "include/task.h"
-#include "include/schedule.h"
-#include "include/verios.h"
-#include "../cpu/xtensa/portmacro.h"
 
 PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
 
@@ -43,6 +59,24 @@ static uint8_t OS_ready_priorities_map[OS_PRIO_MAP_SIZE];
 static ReadyList_t OS_ready_list[OS_MAX_PRIORITIES];
 
 /**
+ * STATIC FUNCTION DEFINITIONS
+ */
+
+static void _OS_schedule_reset_prio_map(void);
+
+static int _OS_schedule_get_highest_prio(void);
+
+static void _OS_schedule_add_prio(int new_prio);
+
+static void _OS_schedule_remove_prio(int prio);
+
+static void _OS_schedule_ready_list_init(void);
+
+static void _OS_schedule_ready_list_insert(TCB_t *new_tcb);
+
+static void _OS_schedule_ready_list_remove(TCB_t *old_tcb);
+
+/**
  * The IDLE Task
  * TODO: Rewrite and move into Task.c
  */
@@ -57,7 +91,7 @@ static portTASK_FUNCTION(OS_idle_task, idle_task_params)
 /**
  * Zeros out the bit map storing priorities that are in use
  */
-void _OS_schedule_reset_prio_map(void){
+static void _OS_schedule_reset_prio_map(void){
     int i;
     for(i = 0; i < OS_PRIO_MAP_SIZE; ++i){
         OS_ready_priorities_map[i] = (uint8_t)0;
@@ -67,7 +101,7 @@ void _OS_schedule_reset_prio_map(void){
 /**
  * Return the highest priority that is currently assigned to any task
  */
-int _OS_schedule_get_highest_prio(void){
+static int _OS_schedule_get_highest_prio(void){
     uint8_t val;
     int leading_zeros = 0;
     int map_index = -1;
@@ -93,7 +127,7 @@ int _OS_schedule_get_highest_prio(void){
  * Add an entry to the priority bitmap corresponding to the new priority
  * Does nothing if the bit is already set to 1
  */
-void _OS_schedule_add_prio(int new_prio)
+static void _OS_schedule_add_prio(int new_prio)
 {
     int index = (int)((OS_MAX_PRIORITIES - new_prio) / 8);
     int shift = (OS_MAX_PRIORITIES - new_prio) % 8;
@@ -105,7 +139,7 @@ void _OS_schedule_add_prio(int new_prio)
  * Remove the entry in the bitmap corresponding to the given priority
  * Should only be done if no tasks use that priority anymore
  */
-void _OS_schedule_remove_prio(int prio)
+static void _OS_schedule_remove_prio(int prio)
 {
     int index = (int)((OS_MAX_PRIORITIES - prio) / 8);
     int shift = (OS_MAX_PRIORITIES - prio) % 8;
@@ -116,7 +150,7 @@ void _OS_schedule_remove_prio(int prio)
 /**
  * Ensures that all entries in the ready list are reset
  */
-void _OS_schedule_ready_list_init(void)
+static void _OS_schedule_ready_list_init(void)
 {
     int index;
     for(index = 0; index < OS_MAX_PRIORITIES; ++i){
@@ -130,26 +164,35 @@ void _OS_schedule_ready_list_init(void)
  * Responsible for placing the tcb in the ready list
  * Application code should not call! This is a helper for OS_add_task_to_ready_list
  */
-void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
+static void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
 {
     /* If this is the first task in this priority bracket */
     int prio = new_tcb->priority;
 
+    /* First entry at given priority */
     if(OS_ready_list[prio].head_ptr == NULL){
         OS_ready_list[prio].head_ptr = new_tcb;
         OS_ready_list[prio].tail_ptr = new_tcb;
+        OS_ready_list[prio].num_tasks = 1;
         return;
     }
+    /* Add to round-robin at given priority */
     OS_ready_list[prio].tail_ptr.next_ptr = new_tcb;
     new_tcb->tail_ptr = OS_ready_list[prio].tail_ptr;
     OS_ready_list[prio].tail_ptr = new_tcb;
+    OS_ready_list[prio].num_tasts++;
+}
+
+static void _OS_schedule_ready_list_remove(TCB_t *old_tcb)
+{
+    /* TODO */
 }
 
 /**
  * The main API function for adding to a ready list!
  * Handles all of the stuff
  */
-void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
+void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
 {
     /* TODO : Ensure that the coreID is not invalid / out of range */
     portENTER_CRITICAL(&OS_schedule_mutex);
@@ -205,6 +248,18 @@ void OS_add_task_to_ready_list(TCB_t *new_tcb, int core_ID)
     portEXIT_CRITICAL(&OS_schedule_mutex);
 }
 
+void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
+{
+    portENTER_CRITICAL(&OS_schedule_mutex);
+
+    if(old_tcb == NULL){
+        old_tcb = OS_schedule_get_current_TCB();
+    }
+   
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+}
+
 void OS_schedule_start(void)
 {
     int i;
@@ -237,7 +292,30 @@ void OS_schedule_start(void)
 
 void OS_schedule_stop()
 {
+    /* Stop the scheduler interrupts and call the portable scheduler end
+	routine so the original ISRs can be restored if necessary.  The port
+	layer must ensure interrupts enable	bit is left in the correct state. */
+    portDISABLE_INTERRUPTS();
+    xSchedulerRunning = pdFALSE;
+    vPortEndScheduler();
+}
 
+
+
+TCB_t* OS_schedule_get_idle_tcb(int core_ID)
+{
+    return &OS_idle_tcb_list[core_ID];
+}
+
+TCB_t* OS_schedule_get_current_tcb(void)
+{
+    TCB_t *current_tcb;
+
+    unsigned state = portENTER_CRITICAL_NESTED();
+    current_tcb = &(OS_current_TCB[xPortGetCoreID()]);
+    portEXIT_CRITICAL_NESTED(state);
+
+    return current_tcb;
 }
 
 void OS_schedule_update(void)

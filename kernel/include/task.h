@@ -1,17 +1,25 @@
-/**
- * 
- * 
- */
- 
- #ifndef OS_TASK_H
- #define OS_TASK_H
+#ifndef OS_TASK_H
+#define OS_TASK_H
 
- #include <limits.h>
- #include <stdint.h>
 
- #define CORE_NO_AFFINITY -1
+#include <limits.h>
+#include <stdint.h>
 
- #define OS_IDLE_STACK_SIZE configIDLE_TASK_SIZE
+#include "list.h"
+#include "freertos/portmacro.h"
+
+#define CORE_NO_AFFINITY -1
+
+#define OS_IDLE_STACK_SIZE configIDLE_TASK_SIZE
+
+/* Specity the size of the integer for a task priority */
+typedef uint8_t TaskPrio_t;
+
+/* The function pointer representing a task function */
+/* TODO: Should be moved to a better header file */
+typedef void (*TaskFunc_t)( void * );
+
+typedef struct OSTaskControlBlock TCB_t;
 
 /**
  * The Task Control Block
@@ -19,7 +27,7 @@
  * 
  * Should NEVER be used by user code
  */
-typedef struct OSTaskControlBlock
+struct OSTaskControlBlock
 {
     /* Pointer to last element pushed to stack */
     volatile StackType_t *stack_top;
@@ -45,16 +53,18 @@ typedef struct OSTaskControlBlock
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
 
+};
 
-} TCB_t;
+/**
+ * FUNCTION HEADERS
+ */
 
-/* Specity the size of the integer for a task priority */
-typedef uint8_t TaskPrio_t;
+int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name, 
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb);
 
-/* The function pointer representing a task function */
-/* TODO: Should be moved to a better header file */
-typedef void (*TaskFunc_t)( void * );
+int OS_task_delete(TCB_t *tcb);
+
+#endif /* OS_TASK_H */
 
 
 
- #endif /* OS_TASK_H */ 
