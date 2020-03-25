@@ -66,9 +66,9 @@ static void _OS_schedule_reset_prio_map(void);
 
 static int _OS_schedule_get_highest_prio(void);
 
-static void _OS_schedule_add_prio(int new_prio);
+static void _OS_schedule_add_prio(TaskPrio_t new_prio);
 
-static void _OS_schedule_remove_prio(int prio);
+static void _OS_schedule_remove_prio(TaskPrio_t old_prio);
 
 static void _OS_schedule_ready_list_init(void);
 
@@ -127,24 +127,24 @@ static int _OS_schedule_get_highest_prio(void){
  * Add an entry to the priority bitmap corresponding to the new priority
  * Does nothing if the bit is already set to 1
  */
-static void _OS_schedule_add_prio(int new_prio)
+static void _OS_schedule_add_prio(TaskPrio_t new_prio)
 {
-    int index = (int)((OS_MAX_PRIORITIES - new_prio) / 8);
-    int shift = (OS_MAX_PRIORITIES - new_prio) % 8;
+    TaskPrio_t index = (TaskPrio_t)((OS_MAX_PRIORITIES - new_prio) / 8);
+    TaskPrio_t shift = (OS_MAX_PRIORITIES - new_prio) % 8;
 
-    OS_ready_priorities_map[index] = OS_ready_priorities_map | ((uint8_t)128 >> shift);
+    OS_ready_priorities_map[index] = OS_ready_priorities_map | ((TaskPrio_t)128 >> shift);
 }
 
 /**
  * Remove the entry in the bitmap corresponding to the given priority
  * Should only be done if no tasks use that priority anymore
  */
-static void _OS_schedule_remove_prio(int prio)
+static void _OS_schedule_remove_prio(TaskPrio_t prio)
 {
-    int index = (int)((OS_MAX_PRIORITIES - prio) / 8);
-    int shift = (OS_MAX_PRIORITIES - prio) % 8;
+    TaskPrio_t index = (TaskPrio_t)((OS_MAX_PRIORITIES - prio) / 8);
+    TaskPrio_t shift = (OS_MAX_PRIORITIES - prio) % 8;
 
-    OS_ready_priorities_map[index] = OS_ready_priorities_map ^ ((uint8_t)128 >> shift);
+    OS_ready_priorities_map[index] = OS_ready_priorities_map ^ ((TaskPrio_t)128 >> shift);
 }
 
 /**
@@ -174,6 +174,7 @@ static void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
         OS_ready_list[prio].head_ptr = new_tcb;
         OS_ready_list[prio].tail_ptr = new_tcb;
         OS_ready_list[prio].num_tasks = 1;
+        _OS_schedule_add_prio(new_tcb->priority);
         return;
     }
     /* Add to round-robin at given priority */
@@ -185,7 +186,42 @@ static void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
 
 static void _OS_schedule_ready_list_remove(TCB_t *old_tcb)
 {
-    /* TODO */
+    TCB_t *tcb_next = old_tcb->next_ptr;
+    TCB_t *tcb_prev = old_tcb->prev_ptr;
+    
+    old_tcb->next_prt = NULL;
+    old_tcb->prev_ptr = NULL;
+    OS_ready_list[old_tcb->priority].num_tasks--;
+
+    /* Is this tcb at the head of the list? */
+    if(tcb_prev == NULL){
+        /* Is this tcb the only entry at this priority level? */
+        if(tcb_next == NULL){
+            OS_ready_list[old_tcb->priority].head_ptr = NULL;
+            OS_ready_list[old_tcb->priority].tail_ptr = NULL;
+
+            /* Remove this priority from the bitmap */
+            _OS_schedule_remove_prio(old_tcb->priority);
+        }
+        /* Update the new head pointer for this priority and decrement task counter */
+        else {
+            tcb_next->prev_ptr = NULL;
+            OS_ready_list[old_tcb->priority].head_ptr = tcb_next
+        }
+        return;
+    }
+
+    /* This tcb is not the head of the list */
+    tcb_prev->next_ptr = tcb_next;
+
+    /* Adjust tail if removing from the tail */
+    if(tcb_next == NULL) {
+        OS_ready_list[old_tcb->priority].tail_ptr = tcb_prev;
+    }
+    else {
+        tcb_next->prev_ptr = tcb_prev;
+    }
+    return;
 }
 
 /**
@@ -223,9 +259,8 @@ void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
         }
     }
     
-    /* Increase the task count and update the ready list and priority bitmap */
+    /* Increase the task count and update the ready list */
     ++OS_num_tasks;
-    _OS_schedule_add_prio(new_tcb->priority);
     _OS_schedule_ready_list_insert(new_tcb);
 
     if(OS_scheduler_running == OS_FALSE) {
