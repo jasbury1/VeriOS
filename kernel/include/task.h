@@ -29,6 +29,9 @@ typedef enum {
     OS_TASK_STATE_READY_TO_DELETE
 } OSTaskState_t;
 
+typedef void *TLSPtr_t;
+typedef void (*TLSPtrDeleteCallback_t)(int, void *);
+
 /**
  * The Task Control Block
  * Kernel bookkeeping on each task created
@@ -60,6 +63,10 @@ struct OSTaskControlBlock
     /* List data */
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
+
+    /* Thread local storage pointers*/
+    TLSPtr_t TLS_table[configNUM_THREAD_LOCAL_STORAGE_POINTERS];
+    TLSPtrDeleteCallback_t TLS_delete_callback_table[configNUM_THREAD_LOCAL_STORAGE_POINTERS];
 
     /* State variables */
     OSTaskState_t task_state;

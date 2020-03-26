@@ -45,6 +45,8 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
 
 static void _OS_task_make_ready(TCB_t *tcb, int core_ID);
 
+static void _OS_task_delete_TLS(TCB_t *tcb);
+
 /**
  * OS_task_create
  * Creates a new task by allocating the stack... etc.
@@ -103,7 +105,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
  */
 int OS_task_delete(TCB_t *tcb)
 {
-	int tcb_core_ID = tcb->core_ID;
+	int tcb_core_ID;
 	int current_core = xPortGetCoreID();
 
 	/* Cannot delete the idle task */
@@ -111,8 +113,33 @@ int OS_task_delete(TCB_t *tcb)
 		return -1;
 	}
 
-	/* IF TCB IS NULL */
+    /* We will assume the current task is to be removed if the tcb is null */
+    if(tcb == NULL){
+        old_tcb = OS_schedule_get_current_TCB();
+    }
 
+    tcb_core_ID = tcb->core_ID;
+
+    OS_schedule_remove_from_ready_list(tcb, tcb_core_ID);
+
+    /* See if the task is ready to be deleted/freed now */
+    if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
+        /* Delete local storage pointers */
+        _OS_task_delete_TLS(tcb);
+    }
+}
+
+/**
+ * Delete Thread-Local-Storage pointers if any exist for the given task
+ */
+static void _OS_task_delete_TLS(TCB_t *tcb)
+{
+    int i;
+    for(i = 0; i < configNUM_THREAD_LOCAL_STORAGE_POINTERS; ++i){
+        if (tcb->TLS_delete_callback_table[i] != NULL) {
+			tcb->TLS_delete_callback_table[i](i, tcb->TLS_table[i]);
+		}
+    }
 }
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
