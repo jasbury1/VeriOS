@@ -35,7 +35,12 @@ privileged Vs unprivileged linkage and placement. */
 
 PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
 
+/* A counter for the number of tasks currently ready (not deleted) */
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
+
+/* A counter for all tasks that have been deleted or pending deletion */
+PRiVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
+
 PRIVILEGED_DATA static volatile uint8_t OS_scheduler_running = OS_FALSE;
 PRIVILEGED_DATA static volatile TickType_t xTickCount = ( TickType_t ) 0;
 
@@ -59,6 +64,12 @@ static uint8_t OS_ready_priorities_map[OS_PRIO_MAP_SIZE];
 static ReadyList_t OS_ready_list[OS_MAX_PRIORITIES];
 
 /**
+ * A list of tasks pending deletion (memory not yet freed).
+ * Deletion should be carried out by IDLE for these tasks
+ */
+static DeletionList_t OS_deletion_pending_list;
+
+/**
  * STATIC FUNCTION DEFINITIONS
  */
 
@@ -76,6 +87,10 @@ static void _OS_schedule_ready_list_insert(TCB_t *new_tcb);
 
 static void _OS_schedule_ready_list_remove(TCB_t *old_tcb);
 
+static void _OS_schedule_deletion_pending_list_insert(TCB_t *tcb);
+
+static void _OS_schedule_deletion_pending_list_remove(TCB_t *tcb);
+
 /**
  * The IDLE Task
  * TODO: Rewrite and move into Task.c
@@ -84,7 +99,9 @@ static portTASK_FUNCTION(OS_idle_task, idle_task_params)
 {
     (void) idle_task_params;
     for(;;) {
-
+        /* DONT WORRY ABOUT DECREMENTING NUMBER OF TASKS HERE
+        This right now will automaticallly be done in the remove from ready list func
+        */
     }
 }
 
@@ -179,7 +196,7 @@ static void _OS_schedule_ready_list_insert(TCB_t *new_tcb)
     }
     /* Add to round-robin at given priority */
     OS_ready_list[prio].tail_ptr.next_ptr = new_tcb;
-    new_tcb->tail_ptr = OS_ready_list[prio].tail_ptr;
+    new_tcb->prev_ptr = OS_ready_list[prio].tail_ptr;
     OS_ready_list[prio].tail_ptr = new_tcb;
     OS_ready_list[prio].num_tasts++;
 }
@@ -222,6 +239,27 @@ static void _OS_schedule_ready_list_remove(TCB_t *old_tcb)
         tcb_next->prev_ptr = tcb_prev;
     }
     return;
+}
+
+static void _OS_schedule_deletion_pending_list_insert(TCB_t *tcb)
+{
+    /* First entry */
+    if(OS_deletion_pending_list.head_ptr == NULL){
+        OS_deletion_pending_list.head_ptr = tcb;
+        OS_deletion_pending_list.tail_ptr = tcb;
+        OS_deletion_pending_list.num_tasks = 1;
+        return;
+    }
+    /* Add to round-robin at given priority */
+    OS_deletion_pending_list.tail_ptr.next_ptr = tcb;
+    tcb->prev_ptr = OS_deletion_pending_list.tail_ptr;
+    OS_deletion_pending_list.tail_ptr = tcb;
+    OS_deletion_pending_list.num_tasts++;
+}
+
+static void _OS_schedule_deletion_pending_list_remove(TCB_t *tcb)
+{
+    /* TODO */
 }
 
 /**
@@ -286,11 +324,45 @@ void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
 void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
 {
     portENTER_CRITICAL(&OS_schedule_mutex);
+    uint8_t ready_to_delete = OS_TRUE;
+    int i;
 
+    /* We will assume the current task is to be removed if the tcb is null */
     if(old_tcb == NULL){
         old_tcb = OS_schedule_get_current_TCB();
     }
-   
+
+    /* Remove the task from the ready list */
+    _OS_schedule_ready_list_remove(old_tcb);
+    /* Decrement the current number of tasks */
+    OS_num_tasks--;
+    OS_num_tasks_deleted++;
+
+    /* If task is waiting on an event, remove it from the wait list */
+    if(OS_TRUE) {
+       /* TODO */
+    }
+
+    /* TODO: Clear future data such as message queues */
+
+    /* Idle must delete this task if it is not on this core */
+    if(core_ID != xPortGetCoreID()){
+        ready_to_delete = OS_FALSE:
+    }
+    /* Idle must delete this task if it is running on any core */
+    for(i = 0; i < portNUM_PROCESSORS; ++i){
+        if(OS_currrent_TCB[i] == old_tcb){
+            ready_to_delete = OS_FALSE;
+        }
+    }
+
+    if(ready_to_delete == OS_TRUE){
+        old_tcb->task_state = OS_TASK_STATE_READY_TO_DELETE;
+    }
+    else {
+        old_tcb->task_state = OS_TASK_STATE_PENDING_DELETION;
+        _OS_schedule_deletion_pending_list_insert(old_tcb);
+    }
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
 }

@@ -21,6 +21,14 @@ typedef void (*TaskFunc_t)( void * );
 
 typedef struct OSTaskControlBlock TCB_t;
 
+typedef enum {
+    OS_TASK_STATE_READY,
+    OS_TASK_STATE_DELAYED,
+    /* TODO add more */
+    OS_TASK_STATE_PENDING_DELETION,
+    OS_TASK_STATE_READY_TO_DELETE
+} OSTaskState_t;
+
 /**
  * The Task Control Block
  * Kernel bookkeeping on each task created
@@ -52,6 +60,9 @@ struct OSTaskControlBlock
     /* List data */
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
+
+    /* State variables */
+    OSTaskState_t task_state;
 
 };
 
