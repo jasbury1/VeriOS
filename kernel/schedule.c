@@ -327,14 +327,10 @@ void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
     uint8_t ready_to_delete = OS_TRUE;
     int i;
 
-    /* We will assume the current task is to be removed if the tcb is null */
-    if(old_tcb == NULL){
-        old_tcb = OS_schedule_get_current_TCB();
-    }
-
     /* Remove the task from the ready list */
     _OS_schedule_ready_list_remove(old_tcb);
-    /* Decrement the current number of tasks */
+
+    /* Update task counters */
     OS_num_tasks--;
     OS_num_tasks_deleted++;
 
@@ -342,8 +338,6 @@ void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
     if(OS_TRUE) {
        /* TODO */
     }
-
-    /* TODO: Clear future data such as message queues */
 
     /* Idle must delete this task if it is not on this core */
     if(core_ID != xPortGetCoreID()){
@@ -362,6 +356,20 @@ void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
     else {
         old_tcb->task_state = OS_TASK_STATE_PENDING_DELETION;
         _OS_schedule_deletion_pending_list_insert(old_tcb);
+    }
+
+    /* Force a reschedule if the conditions require it */
+    if(OS_scheduler_running == OS_TRUE){
+        /* If the task is running on this core */
+        if(old_tcb == OS_current_TCB[core_ID]){
+            portYIELD_WITHIN_API();
+        }
+        /* Yield if the task was running on any other core */
+        for(i = 0; i < portNUM_PROCESSORS; ++i){
+            if(OS_currrent_TCB[i] == old_tcb){
+                vPortYieldOtherCore(i);
+            }
+        }
     }
 
     portEXIT_CRITICAL(&OS_schedule_mutex);

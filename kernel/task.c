@@ -47,6 +47,8 @@ static void _OS_task_make_ready(TCB_t *tcb, int core_ID);
 
 static void _OS_task_delete_TLS(TCB_t *tcb);
 
+static void _OS_task_delete_TCB(TCB_t *tcb)l
+
 /**
  * OS_task_create
  * Creates a new task by allocating the stack... etc.
@@ -126,6 +128,7 @@ int OS_task_delete(TCB_t *tcb)
     if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
         /* Delete local storage pointers */
         _OS_task_delete_TLS(tcb);
+        _OS_task_delete_TCB(tcb);
     }
 }
 
@@ -139,6 +142,29 @@ static void _OS_task_delete_TLS(TCB_t *tcb)
         if (tcb->TLS_delete_callback_table[i] != NULL) {
 			tcb->TLS_delete_callback_table[i](i, tcb->TLS_table[i]);
 		}
+    }
+}
+
+/**
+ * Delete and free the TCB itself
+ */
+static void _OS_task_delete_TCB(TCB_t *tcb)
+{
+    /* If the port includes any specific cleanup */
+    portCLEAN_UP_TCB(tcb);
+
+    /* TODO: Clean up MPU settings . . . once I implement MPU settings . . . */
+    /* TODO: Clean up anything else? Message Queues? */
+
+    /* If the task is dynamically allocated */
+    if(tcb->is_static == OS_FALSE) {
+        /* Free the stack and TCB itself */
+        vPortFreeAligned(tcb->stack_start);
+		vPortFree(tcb)
+    }
+    /* Stack is statically allocated */
+    else {
+        /* TODO: just the stack or tcb static? or are both? Handle these cases */
     }
 }
 
