@@ -39,7 +39,10 @@ PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
 
 /* A counter for all tasks that have been deleted or pending deletion */
-PRiVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
+PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
+
+/* A counter for tasks that have been delayed and placed on a list */
+PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
 
 PRIVILEGED_DATA static volatile uint8_t OS_scheduler_running = OS_FALSE;
 PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = ( TickType_t ) 0;
@@ -73,6 +76,13 @@ static ReadyList_t OS_ready_list[OS_MAX_PRIORITIES];
 static DeletionList_t OS_deletion_pending_list;
 
 /**
+ * The lists of delayed tasks
+ * Index 0 is the regular list, index 1 is a list for overflowed delays.
+ * Both indece's lists are sorted by ascending wake-up time
+ */
+static volatile DelayedList_t OS_delayed_list[2] = {{0, NULL, NULL}};
+
+/**
  * STATIC FUNCTION DEFINITIONS
  */
 
@@ -93,6 +103,10 @@ static void _OS_ready_list_remove(TCB_t *old_tcb);
 static void _OS_deletion_pending_list_insert(TCB_t *tcb);
 
 static void _OS_deletion_pending_list_remove(TCB_t *tcb);
+
+static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow);
+
+static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow);
 
 /**
  * The IDLE Task
@@ -214,6 +228,8 @@ void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
     int i;
 
     /* Remove the task from the ready list */
+    /* TODO !!!!! It might not be on the ready list. Maybe its on the
+    delayed task list??? */
     _OS_ready_list_remove(old_tcb);
 
     /* Update task counters */
@@ -269,12 +285,18 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
 {
     TickType_t wakeup_time;
     TCB_t *current_tcb;
+    uint8_t use_overflow_list = OS_FALSE;
     
     /* TODO: Make sure the scheduler is running. Return error otherwise */
+    /* TODO: make sure tick_delay is NOT negative */
     
     portENTER_CRITICAL(&OS_schedule_mutex);
     wakeup_time = tick_delay + OS_tick_counter;
     current_tcb = &OS_current_TCB[xPortGetCoreID()];
+
+    if(wakeup_time < OS_tick_counter){
+        use_overflow_list = OS_TRUE;
+    }
 
     /* Remove ourselves from the Ready List */
     _OS_ready_list_remove(current_tcb);
@@ -283,6 +305,8 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
     current_tcb->task_state = OS_TASK_STATE_DELAYED;
 
     /* Add to a list of delayed tasks */
+    current_tcb->delay_wakeup_time = wakeup_time;
+    _OS_delayed_list_insert(current_tcb, use_overflow_list);
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
@@ -442,6 +466,62 @@ static void _OS_deletion_pending_list_insert(TCB_t *tcb)
 }
 
 static void _OS_deletion_pending_list_remove(TCB_t *tcb)
+{
+    /* TODO */
+}
+
+static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow)
+{
+    DelayedList_t delayed_list;
+    TCB_t *tcb1;
+    TCB_t *tcb2;
+
+    ++OS_num_tasks_delayed;
+
+    if(user_overflow == OS_TRUE) {
+        delayed_list = OS_delayed_list[1];
+    }
+    else {
+        delayed_list = OS_delayed_list[0]
+    }
+
+    /* First entry in the delayed list */
+    if(delayed_list.head_ptr == NULL) {
+        delayed_list.head_ptr = tcb;
+        delayed_list.tail_ptr = tcb;
+        delayed_list.num_tasks = 0;
+        return;
+    }
+    /* This task is the first one to get woken up */
+    if(delayed_list.head_ptr->delay_wakeup_time >= tcb->delay_wakeup_time) {
+        tcb->prev_ptr = NULL;
+        tcb->next_ptr = delayed_list.head_ptr;
+        delayed_list.head_ptr->prev_ptr = tcb;
+        delayed_list.head_ptr = tcb;
+        return;
+    }
+    /* This task is the last one to get woken up */
+    if(delayed_list.tail_ptr->delay_wakeup_time <= tcb->delay_wakeup_time) {
+        tcb->next_ptr = NULL;
+        tcb->prev_ptr = delayed_list.tail_ptr;
+        delayed_list.tail_ptr->next_ptr = tcb;
+        delayed_list.tail_ptr = tcb;
+        return;
+    }
+    /* Else, find the spot to place this task */
+    tcb1 = delayed_list.head_ptr;
+    while(tcb1->delay_wakeup_time <= tcb->delay_wakeup_time){
+        tcb1 = tcb1->next_ptr;
+    }
+    tcb2 = tcb1->prev_ptr;
+
+    tcb2->next_ptr = tcb;
+    tcb1->prev_ptr = tcb;
+    tcb->prev_ptr = tcb2;
+    tcb->next_ptr = tcb1;
+}
+
+static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow)
 {
     /* TODO */
 }

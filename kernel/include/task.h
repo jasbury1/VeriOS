@@ -16,8 +16,10 @@
 typedef uint8_t TaskPrio_t;
 
 /* The function pointer representing a task function */
-/* TODO: Should be moved to a better header file */
 typedef void (*TaskFunc_t)( void * );
+
+/* If we ever want to pass TCBs around anonymously, cast as TaskHandle_t */
+typedef void * TaskHandle_t;
 
 typedef struct OSTaskControlBlock TCB_t;
 
@@ -70,6 +72,9 @@ struct OSTaskControlBlock
 
     /* State variables */
     OSTaskState_t task_state;
+
+    /* Time to wake this task up if it has been delayed */
+    TickType_t delay_wakeup_time;
 
 };
 
