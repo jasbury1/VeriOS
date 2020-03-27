@@ -111,6 +111,12 @@ static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow);
 
 static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow);
 
+static void _OS_delayed_list_wakeup_next_task(void);
+
+static void _OS_delayed_tasks_cycle_overflow(void);
+
+static void _OS_update_next_task_unblock_time(void);
+
 /**
  * The IDLE Task
  * TODO: Rewrite and move into Task.c
@@ -203,6 +209,8 @@ void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
     /* Increase the task count and update the ready list */
     ++OS_num_tasks;
     _OS_ready_list_insert(new_tcb);
+
+    new_tcb->task_state = OS_TASK_STATE_READY;
 
     if(OS_scheduler_running == OS_FALSE) {
         portEXIT_CRITICAL(&OS_schedule_mutex)
@@ -355,6 +363,19 @@ uint8_t OS_schedule_process_tick(void)
         _OS_delayed_tasks_cycle_overflow();
     }
 
+    /* Wakeup any tasks whose timers have expired */
+    while((OS_delayed_list[0].head_ptr != NULL) && 
+          (OS_delayed_list[0].head_ptr->delay_wakeup_time <= OS_tick_counter)) {
+        if(_OS_delayed_list_wakeup_next_task() == OS_TRUE) {
+            context_switch_required = OS_TRUE;
+        }
+    }
+
+    /* If our current task is in a round robin list, we will have to switch */
+    if(OS_ready_list[OS_current_TCB[xPortGetCoreID()]->priority].num_tasks > 1){
+        context_switch_required = OS_TRUE;
+    }
+    
     portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
     return context_switch_required;
 }
@@ -373,6 +394,13 @@ static void _OS_delayed_tasks_cycle_overflow(void)
     _OS_update_next_task_unblock_time();
 }
 
+/**
+ * This updates the global variable keeping track of the next timeout.
+ * Should get called in only three places:
+ *  - When we cycle the overflow list
+ *  - When we add a task to a delayed list
+ *  - When we remove a task from the delayed list
+ */
 static void _OS_update_next_task_unblock_time(void)
 {
     /* If the list of delayed tasks is empty */
@@ -465,7 +493,7 @@ static void _OS_ready_list_insert(TCB_t *new_tcb)
     int prio = new_tcb->priority;
 
     /* First entry at given priority */
-    if(OS_ready_list[prio].head_ptr == NULL){
+    if(OS_ready_list[prio].num_tasks == 0){
         OS_ready_list[prio].head_ptr = new_tcb;
         OS_ready_list[prio].tail_ptr = new_tcb;
         OS_ready_list[prio].num_tasks = 1;
@@ -522,7 +550,7 @@ static void _OS_ready_list_remove(TCB_t *old_tcb)
 static void _OS_deletion_pending_list_insert(TCB_t *tcb)
 {
     /* First entry */
-    if(OS_deletion_pending_list.head_ptr == NULL){
+    if(OS_deletion_pending_list.num_tasks == 0){
         OS_deletion_pending_list.head_ptr = tcb;
         OS_deletion_pending_list.tail_ptr = tcb;
         OS_deletion_pending_list.num_tasks = 1;
@@ -548,18 +576,23 @@ static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow)
 
     ++OS_num_tasks_delayed;
 
-    if(user_overflow == OS_TRUE) {
+    if(use_overflow == OS_TRUE) {
         delayed_list = OS_delayed_list[1];
     }
     else {
         delayed_list = OS_delayed_list[0]
     }
 
+    /* Update the task counter for this delayed list */
+    delayed_list.num_tasks++;
+
     /* First entry in the delayed list */
     if(delayed_list.head_ptr == NULL) {
         delayed_list.head_ptr = tcb;
         delayed_list.tail_ptr = tcb;
-        delayed_list.num_tasks = 0;
+        if(use_overflow == OS_FALSE){
+            _OS_update_next_task_unblock_time();
+        }
         return;
     }
     /* This task is the first one to get woken up */
@@ -594,6 +627,50 @@ static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow)
 static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow)
 {
     /* TODO */
+
+    /* Every time we remove, make sure to update the OS_next_task_wakeup thing */
+}
+
+
+/**
+ * Wake up the next task on the delayed list.
+ * This only deals with the main delayed list, we won't ever wakeup from the overflow list.
+ * 
+ * Returns True if a context switch is required after the wakeup. False otherwise.
+ */
+static void _OS_delayed_list_wakeup_next_task(void)
+{
+    /* TODO: assert the head of the list is not empty */
+    
+    DelayedList_t delayed_list = OS_delayed_list[0];
+    TCB_t *woken_task = delayed_list.head_ptr;
+    uint8_t context_switch_required = OS_FALSE;
+
+    /* If this is the only entry on the delayed list */
+    if(delayed_list.num_tasks == 1){
+        delayed_list.head_ptr = NULL;
+        delayed_list.tail_ptr = NULL;
+        delayed_list.num_tasks = 0;
+    } else {
+        delayed_list.head_ptr = woken_task->next_ptr;
+        delayed_list.head_ptr->prev_ptr = NULL;
+        delayed_list.num_tasks--;
+    }
+
+    /* Does the woken task have a higher priority than the running task? */
+    if(woken_task->priority >= OS_current_TCB[xPortGetCoreID()]->priority){
+        context_switch_required = OS_TRUE;
+    }
+    /* TODO: Remove from events list if it is on one */
+
+    /* place task on the ready list */
+    _OS_ready_list_insert(woken_task);
+    woken_task->task_state = OS_TASK_STATE_READY;
+
+    /* Update the time of the next wakeup to occur in the delayed list */
+    _OS_update_next_task_unblock_time();
+
+    return context_switch_required;
 }
 
 TCB_t* OS_schedule_get_idle_tcb(int core_ID)

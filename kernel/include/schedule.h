@@ -31,6 +31,8 @@ void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
 
 void OS_schedule_delay_task(const TickType_t tick_delay);
 
+uint8_t OS_schedule_process_tick(void);
+
 TCB_t* OS_schedule_get_idle_tcb(int core_ID);
 
 TCB_t* OS_schedule_get_current_tcb(void);
