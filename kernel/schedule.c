@@ -43,6 +43,7 @@ PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
 
 /* A counter for tasks that have been delayed and placed on a list */
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
+PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = portMAX_DELAY;
 
 PRIVILEGED_DATA static volatile uint8_t OS_scheduler_running = OS_FALSE;
 PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = ( TickType_t ) 0;
@@ -53,6 +54,8 @@ PRIVILEGED_DATA static TCB_t OS_idle_tcb_list[portNUM_PROCESSORS] = {NULL};
 
 /* Keep track of if schedulers are suspended (OS_TRUE) or not (OS_FALSE) */
 PRIVILEGED_DATA static volatile uint8_t OS_suspended_schedulers_list[portNUM_PROCESSORS] = {OS_FALSE};
+/* Keep track of if yields are pending (OS_TRUE) or not (OS_FALSE) on a given processor */
+PRIVILEGED_DATA static volatile uint8_t OS_yield_pending_list[portNUM_PROCESSORS] = {OS_FALSE};
 
 /**
  * Bitmap of priorities in use.
@@ -230,6 +233,7 @@ void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
     /* Remove the task from the ready list */
     /* TODO !!!!! It might not be on the ready list. Maybe its on the
     delayed task list??? */
+    /* If it is on a delayed task list, also call _OS_update_next_task_unblock_time */
     _OS_ready_list_remove(old_tcb);
 
     /* Update task counters */
@@ -311,6 +315,72 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
     portYIELD_WITHIN_API();
+}
+
+/**
+ * Notify the kernel that a tick has occured.
+ * Delays and more must be updated due to this tick event.
+ * 
+ * Returns whether or not a context switch is required
+ */
+uint8_t OS_schedule_process_tick(void)
+{
+    uint8_t context_switch_required = OS_FALSE;
+
+    /* Make sure we yield at the end if a yield is pending */
+    if(OS_yield_pending_list[xPortGetCoreID()] == OS_TRUE) {
+        context_switch_required = OS_TRUE;
+    }
+
+    /* See if the current core is in an ISR context */
+    if (xPortInIsrContext()) {
+        vApplicationTickHook();
+
+        /* Only core 0 can increment the tick count */
+        if (xPortGetCoreID() == 1 ) {
+			return OS_TRUE;
+		}
+    }
+
+    /* Any core can unwind pending ticks while resuming all tasks */
+    if( OS_suspended_schedulers_list[ xPortGetCoreID() ] == OS_TRUE) {
+        ++uxPendedTicks;
+        return context_switch_required;
+    }
+
+    portENTER_CRITICAL_ISR(&OS_schedule_mutex);
+
+    ++OS_tick_counter;
+    if(OS_tick_counter == (TickType_t)0){
+        _OS_delayed_tasks_cycle_overflow();
+    }
+
+    portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
+    return context_switch_required;
+}
+
+static void _OS_delayed_tasks_cycle_overflow(void)
+{
+    /* TODO: ERROR if the first list is not empty */
+    OS_delayed_list[0].head_ptr = OS_delayed_list[1].head_ptr;
+    OS_delayed_list[0].tail_ptr = OS_delayed_list[1].tail_ptr; 
+    OS_delayed_list[0].num_tasks = OS_delayed_list[1].num_tasks;
+
+    OS_delayed_list[1].num_tasks = 0;
+    OS_delayed_list[1].head_ptr = NULL;
+    OS_delayed_list[1].tail_ptr = NULL;
+
+    _OS_update_next_task_unblock_time();
+}
+
+static void _OS_update_next_task_unblock_time(void)
+{
+    /* If the list of delayed tasks is empty */
+    if(OS_delayed_list[0].head_ptr == NULL){
+        OS_next_task_unblock_time = portMAX_DELAY;
+        return;
+    }
+    OS_next_task_unblock_time = OS_delayed_list[0].head_ptr->delay_wakeup_time;
 }
 
 /**
