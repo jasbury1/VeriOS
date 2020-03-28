@@ -25,18 +25,26 @@ void OS_schedule_start(void);
 
 void OS_schedule_stop(void);
 
+void OS_schedule_suspend_all(void);
+
 void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID);
 
 void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
 
 void OS_schedule_delay_task(const TickType_t tick_delay);
 
-uint8_t OS_schedule_process_tick(void);
+void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
+
+OS_prio_t OS_schedule_get_task_prio(TCB_t *tcb);
+
+OSBool_t OS_schedule_process_tick(void);
 
 TCB_t* OS_schedule_get_idle_tcb(int core_ID);
 
 TCB_t* OS_schedule_get_current_tcb(void);
 
-OSScheduleState_t OS_Schedule_get_state(void);
+OSScheduleState_t OS_schedule_get_state(void);
+
+TickType_t OS_schedule_get_tick_count(void);
 
 #endif /* OS_SCHEDULE_H */ 
