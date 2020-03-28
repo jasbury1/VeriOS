@@ -45,17 +45,18 @@ PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
 PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = portMAX_DELAY;
 
-PRIVILEGED_DATA static volatile uint8_t OS_scheduler_running = OS_FALSE;
-PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = ( TickType_t ) 0;
+PRIVILEGED_DATA static volatile OSBool_t OS_scheduler_running = OS_FALSE;
+PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = (TickType_t)0;
+PRIVILEGED_DATA static volatile TickType_t OS_pending_ticks = (TickType_t)0;
 
 PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED
 
 PRIVILEGED_DATA static TCB_t OS_idle_tcb_list[portNUM_PROCESSORS] = {NULL};
 
 /* Keep track of if schedulers are suspended (OS_TRUE) or not (OS_FALSE) */
-PRIVILEGED_DATA static volatile uint8_t OS_suspended_schedulers_list[portNUM_PROCESSORS] = {OS_FALSE};
+PRIVILEGED_DATA static volatile OSBool_t OS_suspended_schedulers_list[portNUM_PROCESSORS] = {OS_FALSE};
 /* Keep track of if yields are pending (OS_TRUE) or not (OS_FALSE) on a given processor */
-PRIVILEGED_DATA static volatile uint8_t OS_yield_pending_list[portNUM_PROCESSORS] = {OS_FALSE};
+PRIVILEGED_DATA static volatile OSBool_t OS_yield_pending_list[portNUM_PROCESSORS] = {OS_FALSE};
 
 /**
  * Bitmap of priorities in use.
@@ -71,6 +72,12 @@ static uint8_t OS_ready_priorities_map[OS_PRIO_MAP_SIZE];
  * Each index corresponds to a priority. Index 0 is priority 0 (reserved for Idle)
  */
 static ReadyList_t OS_ready_list[OS_MAX_PRIORITIES];
+
+/**
+ * The list of tasks that were scheduled while the scheduler was suspended
+ */
+
+static ReadyList_t OS_pending_ready_list[portNUM_PROCESSORS];
 
 /**
  * A list of tasks pending deletion (memory not yet freed).
@@ -107,13 +114,15 @@ static void _OS_deletion_pending_list_insert(TCB_t *tcb);
 
 static void _OS_deletion_pending_list_remove(TCB_t *tcb);
 
-static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow);
+static void _OS_delayed_list_insert(TCB_t *tcb, OSBool_t use_overflow);
 
-static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow);
+static void _OS_delayed_list_remove(TCB_t *tcb, OSBool_t use_overflow);
 
 static void _OS_delayed_list_wakeup_next_task(void);
 
 static void _OS_delayed_tasks_cycle_overflow(void);
+
+static void _OS_pending_ready_list_schedule_next_task(void);
 
 static void _OS_update_next_task_unblock_time(void);
 
@@ -169,6 +178,60 @@ void OS_schedule_stop()
     portDISABLE_INTERRUPTS();
     OS_scheduler_running = OS_FALSE;
     vPortEndScheduler();
+}
+
+void OS_schedule_suspend_all(void)
+{
+    unsigned state;
+    state = portENTER_CRITICAL_NESTED();
+    /* Increment rather than just set to OS_TRUE since suspend calls can be nested */
+    OS_suspended_schedulers_list[xPortGetCoreID()]++;
+    portEXIT_CRITICAL_NESTED(state);
+}
+
+/**
+ * Resume the scheduler. Does not resume individual suspended tasks.
+ * 
+ * Returns whether a context switch is occured or not
+ */
+OSBool_t OS_schedule_resume_all(void)
+{
+    OSBool_t yield_occured = OS_FALSE;
+
+    /* TODO: Use OS_schedule_get_state to make sure the scheduler is NOT RUNNING */
+    /* TODO: Ensure that the suspended int is larger than zero */
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+
+    OS_suspended_schedulers_list[xPortGetCoreID()]--;
+    
+    /* Nothing to do if we are still in nested suspension or have no tasks */
+    if(OS_suspended_schedulers_list[xPortGetCoreID()] == OS_TRUE ||
+       OS_num_tasks == 0) {
+        portEXIT_CRITICAL(&OS_schedule_mutex); 
+        return yield_occured;
+    }
+
+    /* Ready all of the tasks from the pending ready list */
+    while(OS_pending_ready_list[xPortGetCoreID()].num_tasks > 0) {
+        _OS_pending_ready_list_schedule_next_task();
+    }
+
+    /* Get up to date with all the ticks that have passed */
+	while( OS_pending_ticks > 0) {
+		if( OS_schedule_process_tick == OS_TRUE) {
+			OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+		}
+		--OS_pending_ticks;
+	}
+
+    if( OS_yield_pending_list[xPortGetCoreID()] == OS_TRUE ) {
+		yield_occured = OS_TRUE;
+		taskYIELD_IF_USING_PREEMPTION();
+	}
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+    return yield_occured;
 }
 
 /**
@@ -235,7 +298,7 @@ void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
 void OS_schedule_remove_from_ready_list(TCB_t *old_tcb, int core_ID)
 {
     portENTER_CRITICAL(&OS_schedule_mutex);
-    uint8_t ready_to_delete = OS_TRUE;
+    OSBool_t ready_to_delete = OS_TRUE;
     int i;
 
     /* Remove the task from the ready list */
@@ -297,7 +360,7 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
 {
     TickType_t wakeup_time;
     TCB_t *current_tcb;
-    uint8_t use_overflow_list = OS_FALSE;
+    OSBool_t use_overflow_list = OS_FALSE;
     
     /* TODO: Make sure the scheduler is running. Return error otherwise */
     /* TODO: make sure tick_delay is NOT negative */
@@ -331,7 +394,7 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
  * 
  * Returns whether or not a context switch is required
  */
-uint8_t OS_schedule_process_tick(void)
+OSBool_t OS_schedule_process_tick(void)
 {
     uint8_t context_switch_required = OS_FALSE;
 
@@ -352,7 +415,7 @@ uint8_t OS_schedule_process_tick(void)
 
     /* Any core can unwind pending ticks while resuming all tasks */
     if( OS_suspended_schedulers_list[ xPortGetCoreID() ] == OS_TRUE) {
-        ++uxPendedTicks;
+        ++OS_pending_ticks;
         return context_switch_required;
     }
 
@@ -378,6 +441,65 @@ uint8_t OS_schedule_process_tick(void)
     
     portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
     return context_switch_required;
+}
+
+/**
+ * Change the priority of a given task
+ */
+void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
+{
+    OSBool_t context_switch_required = OS_FALSE;
+    TaskPrio_t old_prio;
+
+    /* TODO: Assert the new priority is valid */
+    /* TODO: Assert the task has not been deleted */
+    
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    
+    /* If the tcb is null, get the current tcb */
+    if(tcb == NULL){
+        tcb = OS_schedule_get_current_TCB();
+    }
+    old_prio = tcb->priority;
+    tcb->priority = new_prio;
+
+    /* We raised a task's priority but its not the current task*/
+    if(new_prio > old_prio && tcb != OS_current_TCB[xPortGetCoreID()]) {
+        /* Should run on this core right now */
+        if(tcb->core_ID == xPortGetCoreID() && new_prio >= OS_current_TCB[xPortGetCoreID()]) {
+            context_switch_required = OS_TRUE;
+        }
+        /* Might run on the other core right now */
+        else if(tcb->core_ID != xPortGetCoreID){
+            vPortYieldOtherCore(tcb->core_ID);
+        }        
+    }
+
+    /* Reducing the priority of the current task */
+    if(old_prio > new_prio && tcb == OS_current_TCB[xPortGetCoreID()]) {
+        context_switch_required = OS_TRUE;
+    }
+
+    if(tcb->task_state == OS_TASK_STATE_READY) {
+        /* remove from the old ready list and add to a new one */
+        _OS_ready_list_remove(tcb);
+        _OS_ready_list_insert(tcb);
+    }
+
+    if(context_switch_required == OS_TRUE){
+        portYIELD_WITHIN_API();
+    }
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+}
+
+OS_prio_t OS_schedule_get_task_prio(TCB_t *tcb)
+{
+    OS_prio_t result;
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    result = tcb->priority;
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    return result;
 }
 
 static void _OS_delayed_tasks_cycle_overflow(void)
@@ -568,7 +690,7 @@ static void _OS_deletion_pending_list_remove(TCB_t *tcb)
     /* TODO */
 }
 
-static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow)
+static void _OS_delayed_list_insert(TCB_t *tcb, OSBool_t use_overflow)
 {
     DelayedList_t delayed_list;
     TCB_t *tcb1;
@@ -624,7 +746,7 @@ static void _OS_delayed_list_insert(TCB_t *tcb, uint8_t use_overflow)
     tcb->next_ptr = tcb1;
 }
 
-static void _OS_delayed_list_remove(TCB_t *tcb, uint8_t use_overflow)
+static void _OS_delayed_list_remove(TCB_t *tcb, OSBool_t use_overflow)
 {
     /* TODO */
 
@@ -644,14 +766,15 @@ static void _OS_delayed_list_wakeup_next_task(void)
     
     DelayedList_t delayed_list = OS_delayed_list[0];
     TCB_t *woken_task = delayed_list.head_ptr;
-    uint8_t context_switch_required = OS_FALSE;
+    OSBool_t context_switch_required = OS_FALSE;
 
     /* If this is the only entry on the delayed list */
     if(delayed_list.num_tasks == 1){
         delayed_list.head_ptr = NULL;
         delayed_list.tail_ptr = NULL;
         delayed_list.num_tasks = 0;
-    } else {
+    } 
+    else {
         delayed_list.head_ptr = woken_task->next_ptr;
         delayed_list.head_ptr->prev_ptr = NULL;
         delayed_list.num_tasks--;
@@ -673,6 +796,36 @@ static void _OS_delayed_list_wakeup_next_task(void)
     return context_switch_required;
 }
 
+/**
+ * Removes from the head of the pending ready list.
+ * Adds that task to the ready list
+ */
+static void _OS_pending_ready_list_schedule_next_task(void)
+{
+    ReadyList_t pending_ready_list = OS_pending_ready_list[xPortGetCoreID()];
+    TCB_t *scheduled_tcb = pending_ready_list.head_ptr;
+
+    /* If this is the only entry on the pending ready list */
+    if(pending_ready_list.num_tasks == 1){
+        pending_ready_list.head_ptr = NULL;
+        pending_ready_list.tail_ptr = NULL;
+        pending_ready_list.num_tasks = 0;        
+    }
+    else {
+        pending_ready_list.head_ptr = scheduled_tcb->next_ptr;
+        pending_ready_list.head_ptr->prev_ptr = NULL;
+        pending_ready_list.num_tasks--;
+    }
+
+    /* Place on the ready list */
+    _OS_ready_list_insert(scheduled_tcb);
+    scheduled_tcb->task_state = OS_TASK_STATE_READY;
+
+    if(scheduled_tcb->priority >= OS_current_TCB[xPortGetCoreID()]->priority) {
+        OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
+    }
+}
+
 TCB_t* OS_schedule_get_idle_tcb(int core_ID)
 {
     return &OS_idle_tcb_list[core_ID];
@@ -689,7 +842,7 @@ TCB_t* OS_schedule_get_current_tcb(void)
     return current_tcb;
 }
 
-OSScheduleState_t OS_Schedule_get_state(void)
+OSScheduleState_t OS_schedule_get_state(void)
 {
     unsigned state;
     OSScheduleState_t current_state;
@@ -710,3 +863,6 @@ OSScheduleState_t OS_Schedule_get_state(void)
     return current_state;
 }
 
+TickType_t OS_schedule_get_tick_count(){
+    return OS_tick_counter;
+}
