@@ -38,12 +38,10 @@ privileged Vs unprivileged linkage and placement. */
  */
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
-        uint8_t is_static, int core_ID, int msg_queue_size);
+        OSBool_t is_static, int core_ID, int msg_queue_size);
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
         TaskFunc_t task_func, void *task_arg, TaskPrio_t prio);
-
-static void _OS_task_make_ready(TCB_t *tcb, int core_ID);
 
 static void _OS_task_delete_TLS(TCB_t *tcb);
 
@@ -117,7 +115,7 @@ int OS_task_delete(TCB_t *tcb)
 
     /* We will assume the current task is to be removed if the tcb is null */
     if(tcb == NULL){
-        old_tcb = OS_schedule_get_current_TCB();
+        tcb = OS_schedule_get_current_TCB();
     }
 
     tcb_core_ID = tcb->core_ID;
@@ -130,6 +128,7 @@ int OS_task_delete(TCB_t *tcb)
         _OS_task_delete_TLS(tcb);
         _OS_task_delete_TCB(tcb);
     }
+    return 0;
 }
 
 /**
@@ -169,7 +168,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
 }
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
-        uint8_t is_static, int core_ID, int msg_queue_size)
+        OSBool_t is_static, int core_ID, int msg_queue_size)
 {
     tcb->is_static = is_static;
     tcb->priority = prio;
@@ -189,7 +188,7 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
 {
     StackType_t stack_top;
     StackType_t stack_end;
-    uint8_t run_privileged;
+    OSBool_t run_privileged;
 
     #if( portUSING_MPU_WRAPPERS == 1) {
         if((prio & OS_PRIVILEGE_BIT) != 0U) {
@@ -222,11 +221,4 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
     #endif /* portUsing_MPU_WRAPPERS */
 
 }
-
-static void _OS_task_make_ready(TCB_t *tcb, int core_ID)
-{
-    /* TODO: Remove this function if it doesn't do anything besides call the other one */
-    OS_add_task_to_ready_list(tcb, core_ID);
-}
-
 

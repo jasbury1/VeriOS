@@ -7,6 +7,7 @@
 
 #include "list.h"
 #include "freertos/portmacro.h"
+#include "verios.h"
 
 #define CORE_NO_AFFINITY -1
 
@@ -46,7 +47,7 @@ struct OSTaskControlBlock
     volatile StackType_t *stack_top;
 
     /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
-    uint8_t is_static;
+    OSBool_t is_static;
 
     /* The core being used for multi-core systems */
     int core_ID;
