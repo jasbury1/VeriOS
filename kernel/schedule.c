@@ -29,12 +29,20 @@ header files above, but not in this file, in order to generate the correct
 privileged Vs unprivileged linkage and placement. */
 #undef MPU_WRAPPERS_INCLUDED_FROM_API_FILE /*lint !e961 !e750. */
 
-/*
- * Defines the size, in bytes, of the stack allocated to the idle task.
- */
 
+/*******************************************************************************
+* SCHEDULER CRITICAL STATE VARIABLES
+*******************************************************************************/
 
+PRIVILEGED_DATA static volatile OSBool_t OS_scheduler_running = OS_FALSE;
+PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = (TickType_t)0;
+PRIVILEGED_DATA static volatile TickType_t OS_pending_ticks = (TickType_t)0;
+
+/* Keeps track of the TCBs that are currently running on the processor */
 PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
+
+/* The IDLE TCBs for each processor */
+PRIVILEGED_DATA static TCB_t * OS_idle_tcb_list[portNUM_PROCESSORS] = { NULL };
 
 /* A counter for the number of tasks currently ready (not deleted) */
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
@@ -44,20 +52,22 @@ PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
 
 /* A counter for tasks that have been delayed and placed on a list */
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
+
+/* A counter for the time to unblock the next task that is blocked */
 PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = portMAX_DELAY;
-
-PRIVILEGED_DATA static volatile OSBool_t OS_scheduler_running = OS_FALSE;
-PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = (TickType_t)0;
-PRIVILEGED_DATA static volatile TickType_t OS_pending_ticks = (TickType_t)0;
-
-PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED;
-
-PRIVILEGED_DATA static TCB_t * OS_idle_tcb_list[portNUM_PROCESSORS] = { NULL };
 
 /* Keep track of if schedulers are suspended (OS_TRUE) or not (OS_FALSE) */
 PRIVILEGED_DATA static volatile OSBool_t OS_suspended_schedulers_list[portNUM_PROCESSORS] = {OS_FALSE};
+
 /* Keep track of if yields are pending (OS_TRUE) or not (OS_FALSE) on a given processor */
 PRIVILEGED_DATA static volatile OSBool_t OS_yield_pending_list[portNUM_PROCESSORS] = {OS_FALSE};
+
+/* One mutex for use in scheduler actions */
+PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED;
+
+/*******************************************************************************
+* SCHEDULER CRITICAL DATA STRUCTURES
+*******************************************************************************/
 
 /**
  * Bitmap of priorities in use.
@@ -93,9 +103,9 @@ static DeletionList_t OS_deletion_pending_list;
  */
 static volatile DelayedList_t OS_delayed_list[2] = {{0, NULL, NULL}};
 
-/**
- * STATIC FUNCTION DEFINITIONS
- */
+/*******************************************************************************
+* STATIC FUNCTION DECLARATIONS
+*******************************************************************************/
 
 static void _OS_bitmap_reset_prios(void);
 
@@ -147,13 +157,13 @@ void OS_schedule_start(void)
     int ret_val;
 
     for(i = 0; i < portNUM_PROCESSORS; ++i) {
-        ret_val = OS_task_create(OS_idle_task, (void *)NULL, "IDLE", 0, OS_IDLE_STACK_SIZE, 0, i, OS_idle_tcb_list[i]);
+        ret_val = OS_task_create(OS_idle_task, (void *)NULL, OS_IDLE_NAME, 0, OS_IDLE_STACK_SIZE, 0, i, OS_idle_tcb_list[i]);
         if(ret_val != 0){
             /* TODO Handle error */
         }
     }
     ret_val = xTimerCreateTimerTask();
-    if(ret_val != 1){
+    if(ret_val != 0){
         /* TODO Handle error */
     }
 
@@ -163,11 +173,10 @@ void OS_schedule_start(void)
     OS_scheduler_running = OS_TRUE;
 
     if (xPortStartScheduler() != OS_FALSE) {
-        /* Should not reach here as if the scheduler is running the
-			function will not return. */
+        /* Will Not reach here. Function never returns */
     }
     else {
-        /* Should only reach here if a task calls xTaskEndScheduler(). */
+        /* Should only reach here if a task calls OS_schedule_stop */
     }
 }
 
@@ -471,7 +480,7 @@ void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
             context_switch_required = OS_TRUE;
         }
         /* Might run on the other core right now */
-        else if(tcb->core_ID != xPortGetCoreID(){
+        else if(tcb->core_ID != xPortGetCoreID()){
             vPortYieldOtherCore(tcb->core_ID);
         }        
     }
@@ -537,7 +546,8 @@ static void _OS_update_next_task_unblock_time(void)
 /**
  * Zeros out the bit map storing priorities that are in use
  */
-static void _OS_bitmap_reset_prios(void){
+static void _OS_bitmap_reset_prios(void)
+{
     int i;
     for(i = 0; i < OS_PRIO_MAP_SIZE; ++i){
         OS_ready_priorities_map[i] = (uint8_t)0;
@@ -547,7 +557,8 @@ static void _OS_bitmap_reset_prios(void){
 /**
  * Return the highest priority that is currently assigned to any task
  */
-static int _OS_schedule_get_highest_prio(void){
+static int _OS_schedule_get_highest_prio(void)
+{
     uint8_t val;
     int leading_zeros = 0;
     int map_index = -1;
@@ -769,6 +780,8 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
     TCB_t *woken_task = delayed_list.head_ptr;
     OSBool_t context_switch_required = OS_FALSE;
 
+    --OS_num_tasks_delayed;
+
     /* If this is the only entry on the delayed list */
     if(delayed_list.num_tasks == 1){
         delayed_list.head_ptr = NULL;
@@ -853,13 +866,11 @@ OSScheduleState_t OS_schedule_get_state(void)
     if (OS_scheduler_running == OS_FALSE) {
         current_state = OS_SCHEDULE_NOT_STARTED;
     }
+    else if (OS_suspended_schedulers_list[xPortGetCoreID()] == OS_TRUE) {
+        current_state = OS_SCHEDULE_SUSPENDED;
+    }
     else {
-        if (OS_suspended_schedulers_list[xPortGetCoreID()] == OS_FALSE) {
-            current_state = OS_SCHEDULE_RUNNING;
-        }
-        else {
-            current_state = OS_SCHEDULE_SUSPENDED;
-        }
+        current_state = OS_SCHEDULE_RUNNING;
     }
     portEXIT_CRITICAL_NESTED(state);
     return current_state;

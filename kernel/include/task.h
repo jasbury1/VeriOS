@@ -10,8 +10,11 @@
 
 #define CORE_NO_AFFINITY -1
 
+#define OS_STACK_FILL_BYTE	( 0xa5U )
+
 #define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
 #define OS_IDLE_PRIORITY (uint8_t)0
+#define OS_IDLE_NAME ((const char* const)"IDLE")
 
 /* Specity the size of the integer for a task priority */
 typedef uint8_t TaskPrio_t;
@@ -53,10 +56,10 @@ struct OSTaskControlBlock
     int core_ID;
 
     TaskPrio_t priority;
-    StackType_t stack_start;
-    StackType_t stack_end;
+    StackType_t *stack_start;
+    StackType_t *stack_end;
     int stack_size;
-    char * task_name;
+    const char * task_name;
 
     /* IPC data */
     int msg_queue_size;
@@ -83,7 +86,7 @@ struct OSTaskControlBlock
  * FUNCTION HEADERS
  */
 
-int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name, 
+int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb);
 
 int OS_task_delete(TCB_t *tcb);

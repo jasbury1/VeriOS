@@ -37,7 +37,7 @@ privileged Vs unprivileged linkage and placement. */
  * STATIC FUNCTION DECLARATIONS
  */
 
-static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
+static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
         OSBool_t is_static, int core_ID, int msg_queue_size);
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
@@ -47,29 +47,36 @@ static void _OS_task_delete_TLS(TCB_t *tcb);
 
 static void _OS_task_delete_TCB(TCB_t *tcb);
 
-/**
- * OS_task_create
- * Creates a new task by allocating the stack... etc.
- * 
- * task_func - The function representing a new task
- * task_arg - The argument passed to the task function
- * task_name - The name of the task. For debugging only. Can be null
- * prop - The priority of the task (0-255)
- * stack_size - Size of the stack. Measured in *WORDS*
- * msg_queue_size - ipc message queue size for this task. Can be 0 or negative for no queue. Measured in messages
- * core_ID - The core being used for multicore systems
- * task_tcb - area to allocate tcb. Can be null
- * 
- * Return - Error code for task creation, or 0 if no error occured
- */
-int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name, 
+/*******************************************************************************
+* OS Task Create
+*
+*   task_func = The function representing a new task
+*   task_arg = The argument passed to the task function
+*   task_name = The name of the task for debugging purposes. Can be NULL
+*   prio = The priority of the task. Less than OS_MAX_PRIORITIES
+*   stack_size = The size of the stack measured in WORDS
+*   msg_queu_size = The size of the IPC message queue. Use 0 or negative for no queue
+*   core_ID = The ID of the core to place this task on
+*   task_tcb = Area to allocate the TCB with. Can be NULL
+* 
+* PURPOSE : 
+*   
+*   Create a new task by allocating necessary resources such as the TCB and stack
+* 
+* RETURN :
+*   
+*   Return an error code, or 0 (OS_NO_ERROR) if no error occured
+*
+* NOTES: 
+*******************************************************************************/
+
+int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb)
 {
     StackType_t *task_stack = NULL;
 
     /* Priority 0 is reserved for the Idle task */
-    if(prio == (TaskPrio_t)0) {
-        /* TODO: Typechecking to see if this is the idle TCB. IF it is, dont error */
+    if(prio == (TaskPrio_t)0 && strcmp(task_name, OS_IDLE_NAME) != 0) {
         return -1;
         /* TODO: Better error code */
     }
@@ -100,13 +107,20 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
     return 0;
 }
 
-/**
- * 
- */
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: 
+*******************************************************************************/
 int OS_task_delete(TCB_t *tcb)
 {
 	int tcb_core_ID = tcb->core_ID;
-	int current_core = xPortGetCoreID();
 
 	/* Cannot delete the idle task */
 	if(tcb == OS_schedule_get_idle_tcb(tcb_core_ID)){
@@ -147,9 +161,6 @@ static void _OS_task_delete_TLS(TCB_t *tcb)
  */
 static void _OS_task_delete_TCB(TCB_t *tcb)
 {
-    /* If the port includes any specific cleanup */
-    portCLEAN_UP_TCB(tcb);
-
     /* TODO: Clean up MPU settings . . . once I implement MPU settings . . . */
     /* TODO: Clean up anything else? Message Queues? */
 
@@ -165,7 +176,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
     }
 }
 
-static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio, int stack_size, 
+static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
         OSBool_t is_static, int core_ID, int msg_queue_size)
 {
     tcb->is_static = is_static;
@@ -184,8 +195,7 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char *task_name, TaskPrio_t prio
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
         TaskFunc_t task_func, void *task_arg, TaskPrio_t prio)
 {
-    StackType_t stack_top;
-    StackType_t stack_end;
+    StackType_t *stack_top;
     OSBool_t run_privileged;
 
     #if( portUSING_MPU_WRAPPERS == 1) 
@@ -199,17 +209,10 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
     #endif /* portUSING_MPU_WRAPPERS */
 
     tcb->stack_start = stack_alloc;
+    ( void ) memset( tcb->stack_start, ( int ) OS_STACK_FILL_BYTE, ( size_t ) stack_size * sizeof( StackType_t ) );
     
-    /* Zero out the stack. Debugging bits can replace the 0's later */
-    memset(tcb->stack_start, (int)0x00, (size_t)(stack_size * sizeof(StackType_t)));
-
-    /* TODO: Again here we assume the stack grows downwards */
-    /* TODO: Stolen from FreeRTOS */
-    /* TODO: I want to make this a macro in the future? */
     stack_top = tcb->stack_start + (stack_size - (uint32_t) 1);
     stack_top = (StackType_t *)(((portPOINTER_SIZE_TYPE) stack_top) & ( ~((portPOINTER_SIZE_TYPE) portBYTE_ALIGNMENT_MASK)));
     tcb->stack_end = stack_top;
     tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg, run_privileged);
-
 }
-
