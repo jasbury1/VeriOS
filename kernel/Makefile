@@ -15,4 +15,4 @@ $(ObjECTS):$(SOURCES) $(INCLUDES)
 	$(CC) -c $(CCFLAGS) $(SOURCES)
 
 clean:
-	rm -f $9TARGET) $(OBJECTS)
+	rm -f $(TARGET) $(OBJECTS)

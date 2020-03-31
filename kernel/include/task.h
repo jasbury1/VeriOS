@@ -5,13 +5,13 @@
 #include <limits.h>
 #include <stdint.h>
 
-#include "list.h"
 #include "freertos/portmacro.h"
 #include "verios.h"
 
 #define CORE_NO_AFFINITY -1
 
-#define OS_IDLE_STACK_SIZE configIDLE_TASK_SIZE
+#define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
+#define OS_IDLE_PRIORITY (uint8_t)0
 
 /* Specity the size of the integer for a task priority */
 typedef uint8_t TaskPrio_t;
@@ -89,6 +89,3 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
 int OS_task_delete(TCB_t *tcb);
 
 #endif /* OS_TASK_H */
-
-
-

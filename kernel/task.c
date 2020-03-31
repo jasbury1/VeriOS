@@ -13,10 +13,10 @@ task.h is included from an application file. */
 #include "esp_compiler.h"
 
 /* FreeRTOS includes. */
+#include "FreeRTOS_old.h"
 #include "verios.h"
 #include "task.h"
 #include "schedule.h"
-#include "timers.h"
 #include "StackMacros.h"
 #include "portmacro.h"
 #include "portmacro_priv.h"
@@ -45,7 +45,7 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
 
 static void _OS_task_delete_TLS(TCB_t *tcb);
 
-static void _OS_task_delete_TCB(TCB_t *tcb)l
+static void _OS_task_delete_TCB(TCB_t *tcb);
 
 /**
  * OS_task_create
@@ -65,8 +65,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb)l
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name, 
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb)
 {
-    int i;
-    StackType_t *task_stack = null;
+    StackType_t *task_stack = NULL;
 
     /* Priority 0 is reserved for the Idle task */
     if(prio == (TaskPrio_t)0) {
@@ -76,13 +75,13 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
     }
     
     /* Allocate Stack first so that TCB does not interact with stack memory */
-	task_stack = ( StackType_t * ) pvPortMallocStackMem( ( ( ( size_t ) usStackDepth ) * sizeof( StackType_t ) ) );
-    if(task_stack == null) {
+	task_stack = ( StackType_t * ) pvPortMallocStackMem( ( ( ( size_t ) stack_size ) * sizeof( StackType_t ) ) );
+    if(task_stack == NULL) {
         return -1;
     }
 
     task_tcb = ( TCB_t * ) pvPortMallocTcbMem( sizeof( TCB_t ) );
-    if(task_tcb == null){
+    if(task_tcb == NULL){
         /* Allocating TCB failed. Free the stack and error out */
         vPortFree(task_stack);
         return -1;
@@ -95,7 +94,8 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
 
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID, msg_queue_size);
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
-    _OS_task_make_ready(task_tcb, core_ID);
+    
+    OS_schedule_add_to_ready_list(task_tcb, core_ID);
 
     return 0;
 }
@@ -105,7 +105,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char *task_name,
  */
 int OS_task_delete(TCB_t *tcb)
 {
-	int tcb_core_ID;
+	int tcb_core_ID = tcb->core_ID;
 	int current_core = xPortGetCoreID();
 
 	/* Cannot delete the idle task */
@@ -115,10 +115,8 @@ int OS_task_delete(TCB_t *tcb)
 
     /* We will assume the current task is to be removed if the tcb is null */
     if(tcb == NULL){
-        tcb = OS_schedule_get_current_TCB();
+        tcb = OS_schedule_get_current_tcb();
     }
-
-    tcb_core_ID = tcb->core_ID;
 
     OS_schedule_remove_from_ready_list(tcb, tcb_core_ID);
 
@@ -159,7 +157,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
     if(tcb->is_static == OS_FALSE) {
         /* Free the stack and TCB itself */
         vPortFreeAligned(tcb->stack_start);
-		vPortFree(tcb)
+		vPortFree(tcb);
     }
     /* Stack is statically allocated */
     else {
@@ -190,14 +188,14 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
     StackType_t stack_end;
     OSBool_t run_privileged;
 
-    #if( portUSING_MPU_WRAPPERS == 1) {
-        if((prio & OS_PRIVILEGE_BIT) != 0U) {
-            run_privileged = OS_TRUE;
-        } else {
-            run_privileged = OS_FALSE;
-        }
-        prio &= ~OS_PRIVILEGE_BIT;
+    #if( portUSING_MPU_WRAPPERS == 1) 
+    if((prio & OS_PRIVILEGE_BIT) != 0U) {
+        run_privileged = OS_TRUE;
+    } 
+    else {
+        run_privileged = OS_FALSE;
     }
+    prio &= ~OS_PRIVILEGE_BIT;
     #endif /* portUSING_MPU_WRAPPERS */
 
     tcb->stack_start = stack_alloc;
@@ -209,16 +207,9 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
     /* TODO: Stolen from FreeRTOS */
     /* TODO: I want to make this a macro in the future? */
     stack_top = tcb->stack_start + (stack_size - (uint32_t) 1);
-    stack_top = (Stacktype_t *)(((portPOINTER_SIZE_TYPE) stack_top) & ( ~((portPOINTER_SIZE_TYPE) portBYTE_ALIGNMENT_MASK)));
+    stack_top = (StackType_t *)(((portPOINTER_SIZE_TYPE) stack_top) & ( ~((portPOINTER_SIZE_TYPE) portBYTE_ALIGNMENT_MASK)));
     tcb->stack_end = stack_top;
-
-    #if( portUsing_MPU_WRAPPERS == 1) {
-        tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg, run_privileged);
-    }
-    #else {
-        tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg);
-    }
-    #endif /* portUsing_MPU_WRAPPERS */
+    tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg, run_privileged);
 
 }
 

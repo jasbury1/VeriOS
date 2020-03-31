@@ -2,6 +2,7 @@
 #define OS_SCHEDULE_H
 
 #include "task.h"
+#include "verios.h"
 
 #define OS_PRIO_MAP_SIZE (OS_MAX_PRIORITIES / 8)
 
@@ -27,6 +28,8 @@ void OS_schedule_stop(void);
 
 void OS_schedule_suspend_all(void);
 
+OSBool_t OS_schedule_resume_all(void);
+
 void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID);
 
 void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
@@ -35,7 +38,7 @@ void OS_schedule_delay_task(const TickType_t tick_delay);
 
 void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
 
-OS_prio_t OS_schedule_get_task_prio(TCB_t *tcb);
+TaskPrio_t OS_schedule_get_task_prio(TCB_t *tcb);
 
 OSBool_t OS_schedule_process_tick(void);
 
