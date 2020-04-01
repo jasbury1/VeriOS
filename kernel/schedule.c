@@ -395,6 +395,8 @@ void OS_schedule_switch_context(void)
 
 void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
 {
+    int i;
+
     /* TODO : Ensure that the coreID is not invalid / out of range */
     portENTER_CRITICAL(&OS_schedule_mutex);
 
@@ -408,11 +410,21 @@ void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID)
     if(core_ID == CORE_NO_AFFINITY) {
         /* Place it on the single existing core if we don't have multiple cores */
         core_ID = portNUM_PROCESSORS == 1 ? 0 : core_ID;
-        /* Otherwise place it on a core. TODO: Better logic here in the future. Optimize */
-        core_ID = xPortGetCoreID();
+
+        /* If there is a core that can run it now, place it there */
+        for(i = 0; i < portNUM_PROCESSORS; ++i) {
+            if(OS_current_TCB[i] == NULL || OS_current_TCB[i]-> priority < new_tcb->priority) {
+                core_ID = i;
+                break;
+            }
+        }
+        /* If we still haven't found a core, place it on the current one */
+        if(core_ID == CORE_NO_AFFINITY) {
+            core_ID = xPortGetCoreID();
+        }
     }
 
-    /* If nothing is running on this core then put dat task there */
+    /* If nothing is running on this core then put our task there */
     if(OS_current_TCB[core_ID] == NULL ) {
         OS_current_TCB[core_ID] = new_tcb;
     }
