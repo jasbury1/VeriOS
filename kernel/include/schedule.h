@@ -30,6 +30,8 @@ void OS_schedule_suspend_all(void);
 
 OSBool_t OS_schedule_resume_all(void);
 
+void OS_schedule_switch_context(void);
+
 void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID);
 
 void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
