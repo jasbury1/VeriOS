@@ -38,7 +38,7 @@ privileged Vs unprivileged linkage and placement. */
  */
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
-        OSBool_t is_static, int core_ID, int msg_queue_size);
+        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID, int msg_queue_size);
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
         TaskFunc_t task_func, void *task_arg, TaskPrio_t prio);
@@ -74,7 +74,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb)
 {
     StackType_t *task_stack = NULL;
-
+    
     /* Priority 0 is reserved for the Idle task */
     if(prio == (TaskPrio_t)0 && strcmp(task_name, OS_IDLE_NAME) != 0) {
         return -1;
@@ -99,8 +99,8 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
         /* TODO */
     }
 
-    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, core_ID, msg_queue_size);
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
+    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
     
     OS_schedule_add_to_ready_list(task_tcb, core_ID);
 
@@ -120,21 +120,19 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 *******************************************************************************/
 int OS_task_delete(TCB_t *tcb)
 {
-	int tcb_core_ID = tcb->core_ID;
-
-	/* Cannot delete the idle task */
-	if(tcb == OS_schedule_get_idle_tcb(tcb_core_ID)){
-		return -1;
-	}
-
     /* We will assume the current task is to be removed if the tcb is null */
     if(tcb == NULL){
         tcb = OS_schedule_get_current_tcb();
     }
 
-    OS_schedule_remove_from_ready_list(tcb, tcb_core_ID);
+	/* Cannot delete the idle task */
+	if(tcb == OS_schedule_get_idle_tcb(xPortGetCoreID())){
+		return -1;
+	}
 
-    /* See if the task is ready to be deleted/freed now */
+    OS_schedule_remove_from_ready_list(tcb);
+
+    /* See if the task is ready to be deleted and free'd now */
     if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
         /* Delete local storage pointers */
         _OS_task_delete_TLS(tcb);
@@ -161,7 +159,9 @@ static void _OS_task_delete_TLS(TCB_t *tcb)
  */
 static void _OS_task_delete_TCB(TCB_t *tcb)
 {
-    /* TODO: Clean up MPU settings . . . once I implement MPU settings . . . */
+    _reclaim_reent( &( tcb->xNewLib_reent ) );
+
+    vPortReleaseTaskMPUSettings( &(tcb->MPU_settings) );
     /* TODO: Clean up anything else? Message Queues? */
 
     /* If the task is dynamically allocated */
@@ -177,11 +177,13 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
 }
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
-        OSBool_t is_static, int core_ID, int msg_queue_size)
+        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID, int msg_queue_size)
 {
+    int i;
+
     tcb->is_static = is_static;
     tcb->priority = prio;
-    tcb->task_name = task_name;
+    tcb->base_priority = prio;
     tcb->core_ID = core_ID;
     tcb->msg_queue_size = msg_queue_size;
     tcb->mutexes_held = 0;
@@ -190,6 +192,24 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
     /* Initialize list parameters to null for now */
     tcb->next_ptr = NULL;
     tcb->prev_ptr = NULL;
+
+    /* Take care of event list systems as we are reliant on FreeRTOS for
+        Semaphores/queues/timers */
+    vListInitialiseItem( &(tcb->xEventListItem ) );
+    listSET_LIST_ITEM_VALUE( &(tcb->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) prio );
+	listSET_LIST_ITEM_OWNER( &(tcb->xEventListItem ), tcb);
+
+    /* Copy the task name into the buffer */
+    for( i = 0; i < OS_MAX_TASK_NAME; i++) {
+		tcb->task_name[i] = task_name[i];
+		if( task_name[i] == 0x00 ) {
+			break;
+		}
+	}
+
+    esp_reent_init(&tcb->xNewLib_reent);
+
+	vPortStoreTaskMPUSettings( &(tcb->MPU_settings), mem_region, tcb->stack_start, stack_size );
 }
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 

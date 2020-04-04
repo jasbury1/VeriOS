@@ -2,6 +2,7 @@
 #define OS_SCHEDULE_H
 
 #include "task.h"
+#include "list.h"
 #include "verios.h"
 
 #define OS_PRIO_MAP_SIZE (OS_MAX_PRIORITIES / 8)
@@ -10,13 +11,20 @@ typedef struct OSTaskListHeader {
     int num_tasks;
     TCB_t *head_ptr;
     TCB_t *tail_ptr;
-} ReadyList_t, DeletionList_t, DelayedList_t;
+} ReadyList_t, DeletionList_t, DelayedList_t, SuspendedList_t;
 
 typedef enum {
     OS_SCHEDULE_NOT_STARTED,
     OS_SCHEDULE_RUNNING,
     OS_SCHEDULE_SUSPENDED
 } OSScheduleState_t;
+
+/* Stolen from FreeRTOS. Create my own version later */
+typedef struct xTIME_OUT
+{
+	BaseType_t xOverflowCount;
+	TickType_t xTimeOnEntering;
+} TimeOut_t;
 
 /**
  * FUNCTION HEADERS
@@ -34,11 +42,15 @@ void OS_schedule_switch_context(void);
 
 void OS_schedule_add_to_ready_list(TCB_t *new_tcb, int core_ID);
 
-void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb, int core_ID);
+void OS_schedule_remove_from_ready_list(TCB_t *removed_tcb);
 
 void OS_schedule_delay_task(const TickType_t tick_delay);
 
 void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
+
+void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder);
+
+OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder);
 
 TaskPrio_t OS_schedule_get_task_prio(TCB_t *tcb);
 
@@ -51,5 +63,14 @@ TCB_t* OS_schedule_get_current_tcb(void);
 OSScheduleState_t OS_schedule_get_state(void);
 
 TickType_t OS_schedule_get_tick_count(void);
+
+void * OS_schedule_increment_task_mutex_count(void);
+
+void OS_set_timeout_state( TimeOut_t * const pxTimeOut );
+
+OSBool_t OS_schedule_check_for_timeout( TimeOut_t * const timeout, TickType_t * const ticks_to_wait);
+
+void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const TickType_t ticks_to_wait);
+
 
 #endif /* OS_SCHEDULE_H */ 

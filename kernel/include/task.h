@@ -7,10 +7,13 @@
 
 #include "freertos/portmacro.h"
 #include "verios.h"
+#include "list.h"
 
 #define CORE_NO_AFFINITY -1
 
 #define OS_STACK_FILL_BYTE	( 0xa5U )
+
+#define OS_MAX_TASK_NAME 32
 
 #define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
 #define OS_IDLE_PRIORITY (uint8_t)0
@@ -28,15 +31,26 @@ typedef void * TaskHandle_t;
 typedef struct OSTaskControlBlock TCB_t;
 
 typedef enum {
+    OS_TASK_STATE_RUNNING,
     OS_TASK_STATE_READY,
     OS_TASK_STATE_DELAYED,
-    /* TODO add more */
+    OS_TASK_STATE_SUSPENDED,
     OS_TASK_STATE_PENDING_DELETION,
     OS_TASK_STATE_READY_TO_DELETE
 } OSTaskState_t;
 
 typedef void *TLSPtr_t;
 typedef void (*TLSPtrDeleteCallback_t)(int, void *);
+
+/**
+ * Defines the memory ranges allocated to the task when an MPU is used.
+ */
+typedef struct xMEMORY_REGION
+{
+	void *base_address;
+	uint32_t length_in_bytes;
+	uint32_t parameters;
+} MemoryRegion_t;
 
 /**
  * The Task Control Block
@@ -49,6 +63,9 @@ struct OSTaskControlBlock
     /* Pointer to last element pushed to stack */
     volatile StackType_t *stack_top;
 
+    /* MPU Settings */
+    xMPU_SETTINGS MPU_settings;
+
     /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
     OSBool_t is_static;
 
@@ -59,12 +76,14 @@ struct OSTaskControlBlock
     StackType_t *stack_start;
     StackType_t *stack_end;
     int stack_size;
-    const char * task_name;
+    char task_name[OS_MAX_TASK_NAME];
 
     /* IPC data */
     int msg_queue_size;
 
+    /* Mutex Data */
     int mutexes_held;
+    int base_priority;
 
     /* List data */
     TCB_t *next_ptr;
@@ -79,6 +98,12 @@ struct OSTaskControlBlock
 
     /* Time to wake this task up if it has been delayed */
     TickType_t delay_wakeup_time;
+
+    struct 	_reent xNewLib_reent;
+
+    /* This list item is necessary for now until we are no longer reliant on FreeRTOS's
+        Semaphore/timer/queue systems */
+    ListItem_t	xEventListItem;
 
 };
 
