@@ -9,6 +9,10 @@
 #include "verios.h"
 #include "list.h"
 
+/*******************************************************************************
+* MACROS
+*******************************************************************************/
+
 #define CORE_NO_AFFINITY -1
 
 #define OS_STACK_FILL_BYTE	( 0xa5U )
@@ -18,6 +22,10 @@
 #define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
 #define OS_IDLE_PRIORITY (uint8_t)0
 #define OS_IDLE_NAME ((const char* const)"IDLE")
+
+/*******************************************************************************
+* TYPEDEFS AND DATA STRUCTURES
+*******************************************************************************/
 
 /* Specity the size of the integer for a task priority */
 typedef uint8_t TaskPrio_t;
@@ -107,13 +115,17 @@ struct OSTaskControlBlock
 
 };
 
-/**
- * FUNCTION HEADERS
- */
+/*******************************************************************************
+* FUNCTION HEADERS
+*******************************************************************************//
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
-            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb);
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, void ** const tcb_ptr);
 
 int OS_task_delete(TCB_t *tcb);
+
+char * OS_task_get_name(TCB_t *tcb);
+
+int OS_task_get_core_ID(TCB_t *tcb);
 
 #endif /* OS_TASK_H */

@@ -19,7 +19,10 @@
 /* Definitions specific to the port being used. */
 #include "portable.h"
 
-/* Standard macros */
+/*******************************************************************************
+* MACROS
+*******************************************************************************/
+
 #define OS_TRUE (uint8_t)1
 #define OS_FALSE (uint8_t)0
 
@@ -29,7 +32,16 @@
     #define OS_PRIVILEGE_BIT ((uint8_t) 0x00)
 #endif /* OS_PRIVILEGE_BIT */ 
 
-/* TYPEDEFS */
+/*******************************************************************************
+* TYPEDEFS AND DATA STRUCTURES
+*******************************************************************************/
+
 typedef uint8_t OSBool_t;
+
+typedef enum OS_error_codes {
+    OS_NO_ERROR = 0,
+
+    OS_OTHER_ERROR
+} OSError_t;
 
 #endif /* VERIOS_H */

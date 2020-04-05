@@ -33,9 +33,9 @@ privileged Vs unprivileged linkage and placement. */
  */
 #define tskIDLE_STACK_SIZE	configIDLE_TASK_STACK_SIZE
 
-/**
- * STATIC FUNCTION DECLARATIONS
- */
+/*******************************************************************************
+* STATIC FUNCTION DECLARATIONS
+*******************************************************************************/
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
         OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID, int msg_queue_size);
@@ -57,7 +57,8 @@ static void _OS_task_delete_TCB(TCB_t *tcb);
 *   stack_size = The size of the stack measured in WORDS
 *   msg_queu_size = The size of the IPC message queue. Use 0 or negative for no queue
 *   core_ID = The ID of the core to place this task on
-*   task_tcb = Area to allocate the TCB with. Can be NULL
+*   tcb_ptr = Pointer to space for which to reference a TCB_t* that will be used.
+*             Can be null.
 * 
 * PURPOSE : 
 *   
@@ -71,8 +72,9 @@ static void _OS_task_delete_TCB(TCB_t *tcb);
 *******************************************************************************/
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
-            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, TCB_t *task_tcb)
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, void ** const tcb_ptr)
 {
+    TCB_t *task_tcb;
     StackType_t *task_stack = NULL;
     
     /* Priority 0 is reserved for the Idle task */
@@ -102,7 +104,11 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
     
-    OS_schedule_add_to_ready_list(task_tcb, core_ID);
+    OS_schedule_add_task(task_tcb);
+
+    if((void *)tcb_ptr != NULL){
+        *tcb_ptr = task_tcb;
+    }
 
     return 0;
 }
@@ -110,14 +116,21 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 /*******************************************************************************
 * OS Task Delete
 *
-*   tcb: 
+*   tcb: The tcb to de-allocate and remove from the scheduler.
 * 
-* PURPOSE : 
+* PURPOSE :
+*
+*   Removes the tcb from schedule rotation and any other lists.
+*   Will attempt to de-allocate all resources if possible. Otherwise they will
+*   be left for IDLE to take care of.
 * 
 * RETURN : 
 *
+*   Return an error code, or 0 (OS_NO_ERROR) if no error occured
+*
 * NOTES: 
 *******************************************************************************/
+
 int OS_task_delete(TCB_t *tcb)
 {
     /* We will assume the current task is to be removed if the tcb is null */
@@ -125,14 +138,14 @@ int OS_task_delete(TCB_t *tcb)
         tcb = OS_schedule_get_current_tcb();
     }
 
-	/* Cannot delete the idle task */
-	if(tcb == OS_schedule_get_idle_tcb(xPortGetCoreID())){
-		return -1;
-	}
+    /* Cannot delete the IDLE task */
+    if(tcb->priority == OS_IDLE_PRIORITY){
+        return -1;
+    }
 
-    OS_schedule_remove_from_ready_list(tcb);
+    OS_schedule_remove_task(tcb);
 
-    /* See if the task is ready to be deleted and free'd now */
+    /* See if the task is ready to be deleted and freed now */
     if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
         /* Delete local storage pointers */
         _OS_task_delete_TLS(tcb);
@@ -140,6 +153,74 @@ int OS_task_delete(TCB_t *tcb)
     }
     return 0;
 }
+
+/*******************************************************************************
+* OS Task Get Name
+*
+*   tcb: A pointer to the desired TCB
+* 
+* PURPOSE : 
+*
+*   Get a task's name
+* 
+* RETURN : 
+*
+*   A pointer to the first character of the task name
+*
+* NOTES: 
+*******************************************************************************/
+
+char * OS_task_get_name(TCB_t *tcb)
+{
+    configASSERT(tcb);
+    return &(tcb->task_name[0]);
+}
+
+/*******************************************************************************
+* OS Task Get Core ID
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the core ID that a task was originally assigned to
+* 
+* RETURN :
+*
+*   The core ID or CORE_NO_AFFINITY if the task was not assigned to a specific core
+*
+* NOTES: 
+*******************************************************************************/
+
+int OS_task_get_core_ID(TCB_t *tcb)
+{
+    return tcb->core_ID;
+}
+
+/*******************************************************************************
+* OS Task Get Priority
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the priority of the desired task
+* 
+* RETURN :
+*
+*   The priority assigned to the task
+*
+* NOTES: 
+*******************************************************************************/
+
+TaskPrio_t OS_task_get_priority(TCB_t *tcb)
+{
+    return tcb->priority;
+}
+
+/*******************************************************************************
+* STATIC FUNCTION DEFINITIONS
+*******************************************************************************/
 
 /**
  * Delete Thread-Local-Storage pointers if any exist for the given task
