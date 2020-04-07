@@ -48,12 +48,6 @@ void vTaskAllocateMPURegions( TaskHandle_t xTask, const MemoryRegion_t * const p
 	configASSERT(0 == 1);
 }
 
-/*
-void vTaskDelete( TaskHandle_t xTaskToDelete ) {
-	configASSERT(0 == 1);
-	OS_task_delete((TCB_t *)xTaskToDelete);	
-}
-*/
 
 void vTaskDelay( const TickType_t xTicksToDelay ) {
 	OS_schedule_delay_task(xTicksToDelay);
@@ -265,11 +259,11 @@ void vTaskMissedYield( void ){
 
 BaseType_t xTaskGetSchedulerState( void ){
 	OSScheduleState_t state = OS_schedule_get_state();
-	if(state == OS_SCHEDULE_NOT_STARTED){
+	if(state == OS_SCHEDULE_STATE_STOPPED){
 		return taskSCHEDULER_NOT_STARTED;
-	} else if (state == OS_SCHEDULE_RUNNING) {
+	} else if (state == OS_SCHEDULE_STATE_RUNNING) {
 		return taskSCHEDULER_RUNNING;
-	} else if(state == OS_SCHEDULE_SUSPENDED){
+	} else if(state == OS_SCHEDULE_STATE_SUSPENDED){
 		return taskSCHEDULER_SUSPENDED;
 	}
 	return -1;

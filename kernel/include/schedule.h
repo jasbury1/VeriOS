@@ -22,9 +22,9 @@ typedef struct OSTaskListHeader {
 } ReadyList_t, DeletionList_t, DelayedList_t, SuspendedList_t;
 
 typedef enum {
-    OS_SCHEDULE_NOT_STARTED,
-    OS_SCHEDULE_RUNNING,
-    OS_SCHEDULE_SUSPENDED
+    OS_SCHEDULE_STATE_STOPPED,
+    OS_SCHEDULE_STATE_RUNNING,
+    OS_SCHEDULE_STATE_SUSPENDED
 } OSScheduleState_t;
 
 /* Stolen from FreeRTOS. Create my own version later */

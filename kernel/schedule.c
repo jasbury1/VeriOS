@@ -95,26 +95,26 @@ static volatile ReadyList_t OS_ready_list[OS_MAX_PRIORITIES] = {{0, NULL, NULL}}
  * The list of tasks that were scheduled while the scheduler was suspended
  */
 
-static volatile ReadyList_t OS_pending_ready_list[portNUM_PROCESSORS];
+static volatile ReadyList_t OS_pending_ready_list[portNUM_PROCESSORS] = {{0, NULL, NULL}};
 
 /**
  * A list of tasks pending deletion (memory not yet freed).
  * Deletion should be carried out by IDLE for these tasks
  */
-static DeletionList_t OS_deletion_pending_list;
+static DeletionList_t OS_deletion_pending_list = {0, NULL, NULL};
 
 /**
  * The lists of delayed tasks
  * Index 0 is the regular list, index 1 is a list for overflowed delays.
  * Both indece's lists are sorted by ascending wake-up time
  */
-static volatile DelayedList_t OS_delayed_list[2] = {{0, NULL, NULL}};
+static volatile DelayedList_t OS_delayed_list = {0, NULL, NULL};
 
 /**
  * A list of tasks that have been suspended.
  * This list is unordered. Inserting adds to the end
  */
-static SuspendedList_t OS_suspended_list;
+static SuspendedList_t OS_suspended_list = {0, NULL, NULL};
 
 /*******************************************************************************
 * STATIC FUNCTION DECLARATIONS
@@ -628,6 +628,8 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
 {
     TickType_t wakeup_time;
     TCB_t *current_tcb;
+
+    configASSERT(tick_delay > 0);
     
     /* TODO: Make sure the scheduler is running. Return error otherwise */
     /* TODO: make sure tick_delay is NOT negative */
@@ -644,7 +646,12 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
 
     /* Add to a list of delayed tasks */
     current_tcb->delay_wakeup_time = wakeup_time;
+    configASSERT(current_tcb->delay_wakeup_time > OS_tick_counter);
     _OS_delayed_list_insert(current_tcb);
+    configASSERT(current_tcb->delay_wakeup_time > OS_tick_counter);
+
+
+    assert(OS_delayed_list.head_ptr != NULL);
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
@@ -690,19 +697,21 @@ OSBool_t OS_schedule_process_tick(void)
 
     portENTER_CRITICAL_ISR(&OS_schedule_mutex);
 
-    ++OS_tick_counter;
+    OS_tick_counter++;
     if(OS_tick_counter == (TickType_t)0){
+        configASSERT(0 == 1); /* TODO */
         ++OS_tick_overflow_counter;
-        _OS_delayed_tasks_cycle_overflow();
+        /*_OS_delayed_tasks_cycle_overflow(); */
     }
 
     /* Wakeup any tasks whose timers have expired */
-    while((OS_delayed_list[0].head_ptr != NULL) && 
-          (OS_delayed_list[0].head_ptr->delay_wakeup_time <= OS_tick_counter)) {
+    while((OS_delayed_list.head_ptr != NULL) && 
+          (OS_delayed_list.head_ptr->delay_wakeup_time <= OS_tick_counter)) {
 
         /* Remove the task from an event list if it is on one */
-		if( listLIST_ITEM_CONTAINER( &(OS_delayed_list[0].head_ptr->xEventListItem ) ) != NULL ){
-			( void ) uxListRemove( &(OS_delayed_list[0].head_ptr->xEventListItem ) );
+		if( listLIST_ITEM_CONTAINER( &(OS_delayed_list.head_ptr->xEventListItem ) ) != NULL ){
+			( void ) uxListRemove( &(OS_delayed_list.head_ptr->xEventListItem ) );
+            context_switch_required = OS_TRUE;
         }
 
         /* Wake up the task */
@@ -721,7 +730,7 @@ OSBool_t OS_schedule_process_tick(void)
 }
 
 /*******************************************************************************
-* OS Task Delete
+* OS Schedule Change Task Priority
 *
 *   tcb = A pointer to the tcb that will undergo a priority change
 *   new_prio = The new priority for the given task
@@ -1059,10 +1068,11 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
 * STATIC FUNCTION DEFINITIONS
 *******************************************************************************/
 
+/*
 static void _OS_delayed_tasks_cycle_overflow(void)
 {
-    /* TODO: ERROR if the first list is not empty */
-    OS_delayed_list[0].head_ptr = OS_delayed_list[1].head_ptr;
+    error if first list is not empty
+    OS_delayed_list.head_ptr = OS_delayed_list[1].head_ptr;
     OS_delayed_list[0].tail_ptr = OS_delayed_list[1].tail_ptr; 
     OS_delayed_list[0].num_tasks = OS_delayed_list[1].num_tasks;
 
@@ -1072,6 +1082,7 @@ static void _OS_delayed_tasks_cycle_overflow(void)
 
     _OS_update_next_task_unblock_time();
 }
+*/
 
 /**
  * This updates the global variable keeping track of the next timeout.
@@ -1083,11 +1094,11 @@ static void _OS_delayed_tasks_cycle_overflow(void)
 static void _OS_update_next_task_unblock_time(void)
 {
     /* If the list of delayed tasks is empty */
-    if(OS_delayed_list[0].head_ptr == NULL){
+    if(OS_delayed_list.head_ptr == NULL){
         OS_next_task_unblock_time = portMAX_DELAY;
         return;
     }
-    OS_next_task_unblock_time = OS_delayed_list[0].head_ptr->delay_wakeup_time;
+    OS_next_task_unblock_time = OS_delayed_list.head_ptr->delay_wakeup_time;
 }
 
 /**
@@ -1266,49 +1277,47 @@ static void _OS_deletion_pending_list_remove(TCB_t *tcb)
 
 static void _OS_delayed_list_insert(TCB_t *tcb)
 {
-    DelayedList_t delayed_list;
     TCB_t *tcb1;
     TCB_t *tcb2;
 
     ++OS_num_tasks_delayed;
 
     /* See if we need to use the overflow list */
-    if(tcb->delay_wakeup_time < OS_tick_counter){
-        delayed_list = OS_delayed_list[1];
-    }
+    //if(tcb->delay_wakeup_time < OS_tick_counter){
+    //    delayed_list = OS_delayed_list[1];
+    //}
     /* No overflow: Use the default list */
-    else {
-        delayed_list = OS_delayed_list[0];
-    }
+    //else {
+    //}
 
     /* Update the task counter for this delayed list */
-    delayed_list.num_tasks++;
+    OS_delayed_list.num_tasks++;
 
     /* First entry in the delayed list */
-    if(delayed_list.head_ptr == NULL) {
-        delayed_list.head_ptr = tcb;
-        delayed_list.tail_ptr = tcb;
+    if(OS_delayed_list.head_ptr == NULL) {
+        OS_delayed_list.head_ptr = tcb;
+        OS_delayed_list.tail_ptr = tcb;
         _OS_update_next_task_unblock_time();
         return;
     }
     /* This task is the first one to get woken up */
-    if(delayed_list.head_ptr->delay_wakeup_time >= tcb->delay_wakeup_time) {
+    if(OS_delayed_list.head_ptr->delay_wakeup_time >= tcb->delay_wakeup_time) {
         tcb->prev_ptr = NULL;
-        tcb->next_ptr = delayed_list.head_ptr;
-        delayed_list.head_ptr->prev_ptr = tcb;
-        delayed_list.head_ptr = tcb;
+        tcb->next_ptr = OS_delayed_list.head_ptr;
+        OS_delayed_list.head_ptr->prev_ptr = tcb;
+        OS_delayed_list.head_ptr = tcb;
         return;
     }
     /* This task is the last one to get woken up */
-    if(delayed_list.tail_ptr->delay_wakeup_time <= tcb->delay_wakeup_time) {
+    if(OS_delayed_list.tail_ptr->delay_wakeup_time <= tcb->delay_wakeup_time) {
         tcb->next_ptr = NULL;
-        tcb->prev_ptr = delayed_list.tail_ptr;
-        delayed_list.tail_ptr->next_ptr = tcb;
-        delayed_list.tail_ptr = tcb;
+        tcb->prev_ptr = OS_delayed_list.tail_ptr;
+        OS_delayed_list.tail_ptr->next_ptr = tcb;
+        OS_delayed_list.tail_ptr = tcb;
         return;
     }
     /* Else, find the spot to place this task */
-    tcb1 = delayed_list.head_ptr;
+    tcb1 = OS_delayed_list.head_ptr;
     while(tcb1->delay_wakeup_time <= tcb->delay_wakeup_time){
         tcb1 = tcb1->next_ptr;
     }
@@ -1323,7 +1332,7 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
 static void _OS_delayed_list_remove(TCB_t *tcb)
 {
     /* Every time we remove, make sure to update the OS_next_task_wakeup thing */
-    DelayedList_t delayed_list;
+    /*DelayedList_t delayed_list;*/
     TCB_t *tcb_next = tcb->next_ptr;
     TCB_t *tcb_prev = tcb->prev_ptr;
     
@@ -1333,27 +1342,28 @@ static void _OS_delayed_list_remove(TCB_t *tcb)
     --OS_num_tasks_delayed;
 
     /* See if we need to use the overflow list */
-    if(tcb->delay_wakeup_time < OS_tick_counter){
+    /*if(tcb->delay_wakeup_time < OS_tick_counter){
         delayed_list = OS_delayed_list[1];
-    }
+    }*/
     /* No overflow: Use the default list */
+    /*
     else {
         delayed_list = OS_delayed_list[0];
-    }
+    }*/
 
-    delayed_list.num_tasks--;
+    OS_delayed_list.num_tasks--;
 
     /* Is this tcb at the head of the list? */
     if(tcb_prev == NULL){
         /* Is this tcb the only entry at this priority level? */
         if(tcb_next == NULL){
-            delayed_list.head_ptr = NULL;
-            delayed_list.tail_ptr = NULL;
+            OS_delayed_list.head_ptr = NULL;
+            OS_delayed_list.tail_ptr = NULL;
         }
         /* Update the new head pointer for this priority and decrement task counter */
         else {
             tcb_next->prev_ptr = NULL;
-            delayed_list.head_ptr = tcb_next;
+            OS_delayed_list.head_ptr = tcb_next;
         }
         _OS_update_next_task_unblock_time();
         return;
@@ -1364,7 +1374,7 @@ static void _OS_delayed_list_remove(TCB_t *tcb)
 
     /* Adjust tail if removing from the tail */
     if(tcb_next == NULL) {
-        delayed_list.tail_ptr = tcb_prev;
+        OS_delayed_list.tail_ptr = tcb_prev;
     }
     else {
         tcb_next->prev_ptr = tcb_prev;
@@ -1399,22 +1409,21 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
 {
     /* TODO: assert the head of the list is not empty */
     
-    DelayedList_t delayed_list = OS_delayed_list[0];
-    TCB_t *woken_task = delayed_list.head_ptr;
+    TCB_t *woken_task = OS_delayed_list.head_ptr;
     OSBool_t context_switch_required = OS_FALSE;
 
     --OS_num_tasks_delayed;
 
     /* If this is the only entry on the delayed list */
-    if(delayed_list.num_tasks == 1){
-        delayed_list.head_ptr = NULL;
-        delayed_list.tail_ptr = NULL;
-        delayed_list.num_tasks = 0;
+    if(OS_delayed_list.num_tasks == 1){
+        OS_delayed_list.head_ptr = NULL;
+        OS_delayed_list.tail_ptr = NULL;
+        OS_delayed_list.num_tasks = 0;
     } 
     else {
-        delayed_list.head_ptr = woken_task->next_ptr;
-        delayed_list.head_ptr->prev_ptr = NULL;
-        delayed_list.num_tasks--;
+        OS_delayed_list.head_ptr = woken_task->next_ptr;
+        OS_delayed_list.head_ptr->prev_ptr = NULL;
+        OS_delayed_list.num_tasks--;
     }
 
     /* Does the woken task have a higher priority than the running task? */
@@ -1499,13 +1508,13 @@ OSScheduleState_t OS_schedule_get_state(void)
     
     state = portENTER_CRITICAL_NESTED();
     if (OS_scheduler_running == OS_FALSE) {
-        current_state = OS_SCHEDULE_NOT_STARTED;
+        current_state = OS_SCHEDULE_STATE_STOPPED;
     }
     else if (OS_suspended_schedulers_list[xPortGetCoreID()] == OS_TRUE) {
-        current_state = OS_SCHEDULE_SUSPENDED;
+        current_state = OS_SCHEDULE_STATE_SUSPENDED;
     }
     else {
-        current_state = OS_SCHEDULE_RUNNING;
+        current_state = OS_SCHEDULE_STATE_RUNNING;
     }
     portEXIT_CRITICAL_NESTED(state);
     return current_state;
