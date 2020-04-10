@@ -144,6 +144,8 @@ static void _OS_delayed_list_remove(TCB_t *tcb);
 
 static void _OS_suspended_list_insert(TCB_t *tcb);
 
+static void _OS_suspended_list_remove(TCB_t *tcb);
+
 static OSBool_t _OS_delayed_list_wakeup_next_task(void);
 
 static void _OS_delayed_tasks_cycle_overflow(void);
@@ -180,12 +182,14 @@ static portTASK_FUNCTION(OS_idle_task, idle_task_params)
 * 
 * RETURN : 
 *
+*   Return an error code or 0 (OS_NO_ERROR) if no error occured
+*
 * NOTES:
 *
 *   This function will not return as long as the scheduler is running!
 *******************************************************************************/
 
-void OS_schedule_start(void)
+int OS_schedule_start(void)
 {
     int i;
     int ret_val;
@@ -193,14 +197,14 @@ void OS_schedule_start(void)
     for(i = 0; i < portNUM_PROCESSORS; ++i) {
         ret_val = OS_task_create(OS_idle_task, NULL, OS_IDLE_NAME, 0, OS_IDLE_STACK_SIZE, 
                                     0, i, (void **)(&OS_idle_tcb_list[i]));
-        if(ret_val != 0){
-            /* TODO Handle error */
-            configASSERT(0 == 1);
+        if(ret_val != OS_NO_ERROR){
+            return ret_val;
         }
     }
+    /* TODO: change to our own API in the future */
     ret_val = xTimerCreateTimerTask();
-    if(ret_val != 0){
-        /* TODO Handle error */
+    if(ret_val != 1){
+        return ret_val;
     }
 
     portDISABLE_INTERRUPTS();
@@ -214,6 +218,7 @@ void OS_schedule_start(void)
     else {
         /* Should only reach here if a task calls OS_schedule_stop */
     }
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -283,9 +288,7 @@ void OS_schedule_suspend(void)
 OSBool_t OS_schedule_resume(void)
 {
     OSBool_t yield_occured = OS_FALSE;
-
-    /* TODO: Use OS_schedule_get_state to make sure the scheduler is NOT RUNNING */
-    /* TODO: Ensure that the suspended int is larger than zero */
+    configASSERT(OS_suspended_schedulers_list[xPortGetCoreID()] >= OS_TRUE);
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
@@ -432,19 +435,22 @@ void OS_schedule_switch_context(void)
 * 
 * RETURN : 
 *
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occured
+*
 * NOTES:
 *
 *   This should rarely need to get called by application code. It is automatically
 *   called by OS_task_create
 *******************************************************************************/
 
-void OS_schedule_add_task(TCB_t *new_tcb)
+int OS_schedule_add_task(TCB_t *new_tcb)
 {
     int i;
     int core_ID;
 
-    /* TODO: give this function a return type */
-    configASSERT(new_tcb->priority < OS_MAX_PRIORITIES);
+    if(new_tcb->priority >= OS_MAX_PRIORITIES || new_tcb->priority < 0) {
+        return OS_ERROR_INVALID_PRIO;
+    }
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
@@ -479,8 +485,6 @@ void OS_schedule_add_task(TCB_t *new_tcb)
     /* Make this task the current if its priority is the highest and the scheduler isn't running */
     else if(OS_scheduler_running == OS_FALSE){
         if(OS_current_TCB[core_ID]->priority <= new_tcb->priority) {
-            /* TODO: remove this assert. I was just curious */
-            configASSERT(OS_current_TCB[core_ID]->task_state == OS_TASK_STATE_RUNNING);
             OS_current_TCB[core_ID]->task_state = OS_TASK_STATE_READY;
             OS_current_TCB[core_ID] = new_tcb;
             new_tcb->task_state = OS_TASK_STATE_RUNNING;
@@ -493,7 +497,7 @@ void OS_schedule_add_task(TCB_t *new_tcb)
 
     if(OS_scheduler_running == OS_FALSE) {
         portEXIT_CRITICAL(&OS_schedule_mutex);
-        return;
+        return OS_NO_ERROR;
     }
 
 	/* Scheduler is running. Check to see if we should run the task now */
@@ -509,6 +513,7 @@ void OS_schedule_add_task(TCB_t *new_tcb)
 	}
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -523,12 +528,14 @@ void OS_schedule_add_task(TCB_t *new_tcb)
 * 
 * RETURN : 
 *
+*   Return an error code or 0 (OS_NO_ERROR) if no error occured
+*
 * NOTES: 
 *
 *   Use delay or suspend API calls instead if the task removal is not permanent
 *******************************************************************************/
 
-void OS_schedule_remove_task(TCB_t *old_tcb)
+int OS_schedule_remove_task(TCB_t *old_tcb)
 {
     OSBool_t ready_to_delete = OS_TRUE;
     int i;
@@ -538,10 +545,9 @@ void OS_schedule_remove_task(TCB_t *old_tcb)
     configASSERT(old_tcb != NULL);
 
     /* Cannot remove the idle task */
-    /* TODO: does this work with task name as an array? */
 	if(old_tcb->priority == OS_IDLE_PRIORITY){
-		/* TODO: Return an error return -1; */
-        configASSERT(0 == 1);
+        portEXIT_CRITICAL(&OS_schedule_mutex);
+        return OS_ERROR_IDLE_DELETE;
 	}
 
     switch(old_tcb->task_state) {
@@ -555,16 +561,18 @@ void OS_schedule_remove_task(TCB_t *old_tcb)
             _OS_delayed_list_remove(old_tcb);
             break;
         case OS_TASK_STATE_SUSPENDED:
-            configASSERT(0 == 1); /* TODO */
+            _OS_suspended_list_remove(old_tcb);
             break;
         case OS_TASK_STATE_PENDING_DELETION:
-            configASSERT(0 == 1);
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DOUBLE_DELETE;
             break;
         case OS_TASK_STATE_READY_TO_DELETE:
-            configASSERT(0 == 1);
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DOUBLE_DELETE;
             break;
         default:
-            configASSERT(0 == 1);
+            configASSERT(OS_FALSE);
     }
 
     /* Necessary since we use FreeRTOS events lists (for now) */
@@ -607,6 +615,7 @@ void OS_schedule_remove_task(TCB_t *old_tcb)
         }
     }
     portEXIT_CRITICAL(&OS_schedule_mutex);
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -621,18 +630,25 @@ void OS_schedule_remove_task(TCB_t *old_tcb)
 * 
 * RETURN : 
 *
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occured
+*
 * NOTES: 
 *******************************************************************************/
 
-void OS_schedule_delay_task(const TickType_t tick_delay)
+int OS_schedule_delay_task(const TickType_t tick_delay)
 {
     TickType_t wakeup_time;
     TCB_t *current_tcb;
 
-    configASSERT(tick_delay > 0);
-    
-    /* TODO: Make sure the scheduler is running. Return error otherwise */
-    /* TODO: make sure tick_delay is NOT negative */
+    /* Scheduler must be running in order to delay a task */
+    if(OS_scheduler_running == OS_FALSE) {
+        return OS_ERROR_SCHEDULER_STOPPED;
+    }
+
+    /* Tick delay must be greater than or equal to zero */
+    if(tick_delay < 0){
+        return OS_ERROR_INVALID_DLY;
+    }
     
     portENTER_CRITICAL(&OS_schedule_mutex);
     wakeup_time = tick_delay + OS_tick_counter;
@@ -650,12 +666,11 @@ void OS_schedule_delay_task(const TickType_t tick_delay)
     _OS_delayed_list_insert(current_tcb);
     configASSERT(current_tcb->delay_wakeup_time > OS_tick_counter);
 
-
     assert(OS_delayed_list.head_ptr != NULL);
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
-
     portYIELD_WITHIN_API();
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -739,22 +754,21 @@ OSBool_t OS_schedule_process_tick(void)
 *
 *   Change the priority of a task and force a reschedule if necessary
 * 
-* RETURN : 
+* RETURN :
+*
+*   Return an error code or 0 (OS_NO_ERROR) if no error occured 
 *
 * NOTES: 
 *******************************************************************************/
 
-void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
+int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
 {
     OSBool_t context_switch_required = OS_FALSE;
     TaskPrio_t old_prio;
 
-    /* TODO: THIS function needs a lot of work. Im suspicious about where we
-    yield to the other core */
-    configASSERT(0 == 1);
-
-    /* TODO: Assert the new priority is valid */
-    /* TODO: Assert the task has not been deleted */
+    if(new_prio >= OS_MAX_PRIORITIES || new_prio <= 0) {
+        return OS_ERROR_INVALID_PRIO;
+    }
     
     portENTER_CRITICAL(&OS_schedule_mutex);
     
@@ -767,21 +781,12 @@ void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
     /* Nothing to do if the base priority equals the new priority */
     if(tcb->base_priority == new_prio){
         portEXIT_CRITICAL(&OS_schedule_mutex);
-        return;
+        return OS_NO_ERROR;
     }
     
-    /* TODO: This needs cleanup */
-    if(tcb->task_state == OS_TASK_STATE_READY) {
-        /* remove from the old ready list and add to a new one */
-        _OS_ready_list_remove(tcb);
-    }
     if(tcb->base_priority == tcb->priority){
         tcb->priority = new_prio;
     }
-    if(tcb->task_state == OS_TASK_STATE_READY) {
-        _OS_ready_list_insert(tcb);
-    }
-    /* TODO: end of section needing cleanup */
 
     if( ( listGET_LIST_ITEM_VALUE( &( tcb->xEventListItem ) ) & taskEVENT_LIST_ITEM_VALUE_IN_USE ) == 0UL ){
 		listSET_LIST_ITEM_VALUE( &( tcb->xEventListItem ), ( ( TickType_t ) configMAX_PRIORITIES - ( TickType_t )new_prio) );
@@ -795,7 +800,7 @@ void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         }
         /* Might run on the other core right now */
         else if(tcb->core_ID != xPortGetCoreID()){
-            _OS_schedule_yield_other_core(tcb->core_ID, new_prio);
+            context_switch_required = OS_TRUE;
         }        
     }
 
@@ -804,17 +809,42 @@ void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         context_switch_required = OS_TRUE;
     }
 
-    if(tcb->task_state == OS_TASK_STATE_READY) {
-        /* remove from the old ready list and add to a new one */
-        _OS_ready_list_remove(tcb);
-        _OS_ready_list_insert(tcb);
+    switch(tcb->task_state) {
+        case OS_TASK_STATE_RUNNING:
+            _OS_ready_list_remove(tcb);
+            _OS_ready_list_insert(tcb);
+            break;
+        case OS_TASK_STATE_READY:
+            _OS_ready_list_remove(tcb);
+            _OS_ready_list_insert(tcb);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            break;
+        case OS_TASK_STATE_PENDING_DELETION:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+            break;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+            break;
+        default:
+            configASSERT(OS_FALSE);
     }
 
     if(context_switch_required == OS_TRUE){
-        portYIELD_WITHIN_API();
+        if(tcb->core_ID != xPortGetCoreID()){
+            _OS_schedule_yield_other_core(tcb->core_ID, new_prio);
+        }
+        else {
+            portYIELD_WITHIN_API();
+        }
     }
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -1204,24 +1234,6 @@ static void _OS_ready_list_insert(TCB_t *new_tcb)
 
 static void _OS_ready_list_remove(TCB_t *old_tcb)
 {
-    configASSERT(old_tcb != NULL);
-    configASSERT(old_tcb->priority != 0);
-
-
-
-
-    int i = 0;
-    TCB_t* temp = OS_ready_list[old_tcb->priority].head_ptr;
-    while(temp != NULL){
-        if(old_tcb == temp){
-            i = 1;
-        }
-        temp = temp->next_ptr;
-    }
-    configASSERT(i == 1);
-
-
-
     /* Removing the only task */
     if(OS_ready_list[old_tcb->priority].num_tasks == 1){
         OS_ready_list[old_tcb->priority].head_ptr = NULL;
@@ -1331,55 +1343,35 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
 
 static void _OS_delayed_list_remove(TCB_t *tcb)
 {
-    /* Every time we remove, make sure to update the OS_next_task_wakeup thing */
-    /*DelayedList_t delayed_list;*/
-    TCB_t *tcb_next = tcb->next_ptr;
-    TCB_t *tcb_prev = tcb->prev_ptr;
-    
+    OS_num_tasks_delayed--;
+
+    /* Removing the only task */
+    if(OS_delayed_list.num_tasks == 1){
+        OS_delayed_list.head_ptr = NULL;
+        OS_delayed_list.tail_ptr = NULL;
+    }
+    /* Removing the head */
+    else if(tcb == OS_delayed_list.head_ptr){
+        OS_delayed_list.head_ptr = tcb->next_ptr;
+        OS_delayed_list.head_ptr->prev_ptr = NULL;
+        _OS_update_next_task_unblock_time();
+    }
+    /* Removing the tail */
+    else if(tcb == OS_delayed_list.tail_ptr){
+        OS_delayed_list.tail_ptr = tcb->prev_ptr;
+        OS_delayed_list.tail_ptr->next_ptr = NULL;
+    }
+    /* Removing in the middle */
+    else {
+        configASSERT(OS_delayed_list.num_tasks > 2);
+        configASSERT(tcb->next_ptr != NULL);
+        configASSERT(tcb->prev_ptr != NULL);
+        tcb->next_ptr->prev_ptr = tcb->next_ptr;
+        tcb->prev_ptr->next_ptr = tcb->next_ptr;
+    }
     tcb->next_ptr = NULL;
     tcb->prev_ptr = NULL;
-
-    --OS_num_tasks_delayed;
-
-    /* See if we need to use the overflow list */
-    /*if(tcb->delay_wakeup_time < OS_tick_counter){
-        delayed_list = OS_delayed_list[1];
-    }*/
-    /* No overflow: Use the default list */
-    /*
-    else {
-        delayed_list = OS_delayed_list[0];
-    }*/
-
-    OS_delayed_list.num_tasks--;
-
-    /* Is this tcb at the head of the list? */
-    if(tcb_prev == NULL){
-        /* Is this tcb the only entry at this priority level? */
-        if(tcb_next == NULL){
-            OS_delayed_list.head_ptr = NULL;
-            OS_delayed_list.tail_ptr = NULL;
-        }
-        /* Update the new head pointer for this priority and decrement task counter */
-        else {
-            tcb_next->prev_ptr = NULL;
-            OS_delayed_list.head_ptr = tcb_next;
-        }
-        _OS_update_next_task_unblock_time();
-        return;
-    }
-
-    /* This tcb is not the head of the list */
-    tcb_prev->next_ptr = tcb_next;
-
-    /* Adjust tail if removing from the tail */
-    if(tcb_next == NULL) {
-        OS_delayed_list.tail_ptr = tcb_prev;
-    }
-    else {
-        tcb_next->prev_ptr = tcb_prev;
-    }
-    return;
+    OS_suspended_list.num_tasks--;
 }
 
 static void _OS_suspended_list_insert(TCB_t *tcb)
@@ -1398,6 +1390,35 @@ static void _OS_suspended_list_insert(TCB_t *tcb)
     OS_suspended_list.num_tasks++;
 }
 
+static void _OS_suspended_list_remove(TCB_t *tcb)
+{
+    /* Removing the only task */
+    if(OS_suspended_list.num_tasks == 1){
+        OS_suspended_list.head_ptr = NULL;
+        OS_suspended_list.tail_ptr = NULL;
+    }
+    /* Removing the head */
+    else if(tcb == OS_suspended_list.head_ptr){
+        OS_suspended_list.head_ptr = tcb->next_ptr;
+        OS_suspended_list.head_ptr->prev_ptr = NULL;
+    }
+    /* Removing the tail */
+    else if(tcb == OS_suspended_list.tail_ptr){
+        OS_suspended_list.tail_ptr = tcb->prev_ptr;
+        OS_suspended_list.tail_ptr->next_ptr = NULL;
+    }
+    /* Removing in the middle */
+    else {
+        configASSERT(OS_suspended_list.num_tasks > 2);
+        configASSERT(tcb->next_ptr != NULL);
+        configASSERT(tcb->prev_ptr != NULL);
+        tcb->next_ptr->prev_ptr = tcb->next_ptr;
+        tcb->prev_ptr->next_ptr = tcb->next_ptr;
+    }
+    tcb->next_ptr = NULL;
+    tcb->prev_ptr = NULL;
+    OS_suspended_list.num_tasks--;
+}
 
 /**
  * Wake up the next task on the delayed list.

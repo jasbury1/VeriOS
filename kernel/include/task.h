@@ -117,7 +117,7 @@ struct OSTaskControlBlock
 
 /*******************************************************************************
 * FUNCTION HEADERS
-*******************************************************************************//
+*******************************************************************************/
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, void ** const tcb_ptr);

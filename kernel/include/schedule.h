@@ -38,7 +38,7 @@ typedef struct xTIME_OUT
 * FUNCTION HEADERS
 *******************************************************************************/
 
-void OS_schedule_start(void);
+int OS_schedule_start(void);
 
 void OS_schedule_stop(void);
 
@@ -48,13 +48,13 @@ OSBool_t OS_schedule_resume(void);
 
 void OS_schedule_switch_context(void);
 
-void OS_schedule_add_task(TCB_t *new_tcb);
+int OS_schedule_add_task(TCB_t *new_tcb);
 
-void OS_schedule_remove_task(TCB_t *old_tcb);
+int OS_schedule_remove_task(TCB_t *old_tcb);
 
-void OS_schedule_delay_task(const TickType_t tick_delay);
+int OS_schedule_delay_task(const TickType_t tick_delay);
 
-void OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
+int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
 
 void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder);
 

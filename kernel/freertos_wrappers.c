@@ -25,6 +25,7 @@ BaseType_t xTaskCreatePinnedToCore(	TaskFunction_t pvTaskCode,
 										UBaseType_t uxPriority,
 										TaskHandle_t * const pvCreatedTask,
 										const BaseType_t xCoreID){
+											
     int res = OS_task_create((TaskFunc_t) pvTaskCode,
 							 pvParameters,
 							 pcName,

@@ -76,24 +76,29 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 {
     TCB_t *task_tcb;
     StackType_t *task_stack = NULL;
+    int ret_val;
     
     /* Priority 0 is reserved for the Idle task */
     if(prio == (TaskPrio_t)0 && strcmp(task_name, OS_IDLE_NAME) != 0) {
-        return -1;
-        /* TODO: Better error code */
+        return OS_ERROR_RESERVED_PRIORITY;
     }
-    
+
+    /* Make sure the stack size is valid */
+    if(stack_size <= 0) {
+        return OS_ERROR_INVALID_STKSIZE;
+    }
+
     /* Allocate Stack first so that TCB does not interact with stack memory */
 	task_stack = ( StackType_t * ) pvPortMallocStackMem( ( ( ( size_t ) stack_size ) * sizeof( StackType_t ) ) );
     if(task_stack == NULL) {
-        return -1;
+        return OS_ERROR_STACK_ALLOC;
     }
 
     task_tcb = ( TCB_t * ) pvPortMallocTcbMem( sizeof( TCB_t ) );
     if(task_tcb == NULL){
         /* Allocating TCB failed. Free the stack and error out */
         vPortFree(task_stack);
-        return -1;
+        return OS_ERROR_TCB_ALLOC;
     }
     
     /* Handle message queue */
@@ -104,13 +109,16 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
     
-    OS_schedule_add_task(task_tcb);
+    ret_val = OS_schedule_add_task(task_tcb);
+    if(ret_val != OS_NO_ERROR) {
+        return ret_val;
+    }
 
     if((void *)tcb_ptr != NULL){
         *tcb_ptr = task_tcb;
     }
 
-    return 0;
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -133,6 +141,8 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 
 int OS_task_delete(TCB_t *tcb)
 {
+    int ret_val;
+
     /* We will assume the current task is to be removed if the tcb is null */
     if(tcb == NULL){
         tcb = OS_schedule_get_current_tcb();
@@ -140,10 +150,13 @@ int OS_task_delete(TCB_t *tcb)
 
     /* Cannot delete the IDLE task */
     if(tcb->priority == OS_IDLE_PRIORITY){
-        return -1;
+        return OS_ERROR_IDLE_DELETE;
     }
 
-    OS_schedule_remove_task(tcb);
+    ret_val = OS_schedule_remove_task(tcb);
+    if(ret_val != OS_NO_ERROR) {
+        return ret_val;
+    }
 
     /* See if the task is ready to be deleted and freed now */
     if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
@@ -194,6 +207,7 @@ char * OS_task_get_name(TCB_t *tcb)
 
 int OS_task_get_core_ID(TCB_t *tcb)
 {
+    configASSERT(tcb);
     return tcb->core_ID;
 }
 
@@ -215,6 +229,7 @@ int OS_task_get_core_ID(TCB_t *tcb)
 
 TaskPrio_t OS_task_get_priority(TCB_t *tcb)
 {
+    configASSERT(tcb);
     return tcb->priority;
 }
 

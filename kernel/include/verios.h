@@ -41,6 +41,22 @@ typedef uint8_t OSBool_t;
 typedef enum OS_error_codes {
     OS_NO_ERROR = 0,
 
+    /* Task creation and deletion */
+    OS_ERROR_RESERVED_PRIORITY,
+    OS_ERROR_INVALID_STKSIZE,
+    OS_ERROR_STACK_ALLOC,
+    OS_ERROR_TCB_ALLOC,
+    OS_ERROR_IDLE_DELETE,
+    OS_ERROR_DOUBLE_DELETE,
+
+    OS_ERROR_INVALID_TSK_STATE,
+    OS_ERROR_INVALID_PRIO,
+    OS_ERROR_INVALID_DLY,
+
+    OS_ERROR_DELETED_TASK,
+
+    OS_ERROR_SCHEDULER_STOPPED,
+
     OS_OTHER_ERROR
 } OSError_t;
 
