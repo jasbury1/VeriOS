@@ -17,6 +17,7 @@ task.h is included from an application file. */
 #include "verios.h"
 #include "task.h"
 #include "schedule.h"
+#include "msg_queue.h"
 #include "StackMacros.h"
 #include "portmacro.h"
 #include "portmacro_priv.h"
@@ -108,6 +109,9 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
+    
+    /* Set up the task's IPC system */
+    OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
     
     ret_val = OS_schedule_add_task(task_tcb);
     if(ret_val != OS_NO_ERROR) {

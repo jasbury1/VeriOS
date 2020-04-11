@@ -15,11 +15,10 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
-typedef struct OSTaskListHeader {
-    int num_tasks;
-    TCB_t *head_ptr;
-    TCB_t *tail_ptr;
-} ReadyList_t, DeletionList_t, DelayedList_t, SuspendedList_t;
+typedef struct OSTaskListHeader ReadyList_t;
+typedef struct OSTaskListHeader DeletionList_t;
+typedef struct OSTaskListHeader DelayedList_t;
+typedef struct OSTaskListHeader SuspendedList_t;
 
 typedef enum {
     OS_SCHEDULE_STATE_STOPPED,

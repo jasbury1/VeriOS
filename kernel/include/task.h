@@ -7,6 +7,7 @@
 
 #include "freertos/portmacro.h"
 #include "verios.h"
+#include "msg_queue.h"
 #include "list.h"
 
 /*******************************************************************************
@@ -35,8 +36,6 @@ typedef void (*TaskFunc_t)( void * );
 
 /* If we ever want to pass TCBs around anonymously, cast as TaskHandle_t */
 typedef void * TaskHandle_t;
-
-typedef struct OSTaskControlBlock TCB_t;
 
 typedef enum {
     OS_TASK_STATE_RUNNING,
@@ -96,6 +95,9 @@ struct OSTaskControlBlock
     /* List data */
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
+
+    /* IPC data */
+    MessageQueue_t msg_queue;
 
     /* Thread local storage pointers*/
     TLSPtr_t TLS_table[configNUM_THREAD_LOCAL_STORAGE_POINTERS];

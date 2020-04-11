@@ -36,6 +36,8 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
+typedef struct OSTaskControlBlock TCB_t;
+
 typedef uint8_t OSBool_t;
 
 typedef enum OS_error_codes {
@@ -59,5 +61,11 @@ typedef enum OS_error_codes {
 
     OS_OTHER_ERROR
 } OSError_t;
+
+struct OSTaskListHeader {
+    int num_tasks;
+    TCB_t *head_ptr;
+    TCB_t *tail_ptr;
+};
 
 #endif /* VERIOS_H */
