@@ -111,7 +111,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
     
     /* Set up the task's IPC system */
-    OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
+    _OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
     
     ret_val = OS_schedule_add_task(task_tcb);
     if(ret_val != OS_NO_ERROR) {

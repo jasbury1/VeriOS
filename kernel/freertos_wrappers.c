@@ -51,7 +51,7 @@ void vTaskAllocateMPURegions( TaskHandle_t xTask, const MemoryRegion_t * const p
 
 
 void vTaskDelay( const TickType_t xTicksToDelay ) {
-	OS_schedule_delay_task(xTicksToDelay);
+	OS_schedule_delay_task(NULL, xTicksToDelay);
 }
 
 void vTaskDelayUntil( TickType_t * const pxPreviousWakeTime, const TickType_t xTimeIncrement ) {

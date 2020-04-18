@@ -51,7 +51,9 @@ int OS_schedule_add_task(TCB_t *new_tcb);
 
 int OS_schedule_remove_task(TCB_t *old_tcb);
 
-int OS_schedule_delay_task(const TickType_t tick_delay);
+int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay);
+
+int OS_schedule_suspend_task(TCB_t *tcb);
 
 int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
 

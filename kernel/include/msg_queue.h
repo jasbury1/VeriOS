@@ -12,33 +12,37 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
-typedef struct OSMessageQueue MessageQueue_t;
 typedef struct OSTaskListHeader WaitList_t;
 
 typedef struct OSMessage {
-
     TCB_t *sender;
     void *contents;
-
 } Message_t;
 
-struct OSMessageQueue {
+typedef struct OSMessageQueue {
     int max_messages;
     int num_messages;
 
     WaitList_t send_waiters;
     WaitList_t reveive_waiters;
 
-    MessageQueue_t *head_ptr;
-    MessageQueue_t *tail_ptr;
+    Message_t *head_ptr;
+    Message_t *tail_ptr;
 
     portMUX_TYPE mux;
-};
+} MessageQueue_t;
+
+typedef struct OSMessagePool {
+    int num_messages;
+    Message_t *head_ptr;
+    Message_t *tail_ptr;
+} MessagePool_t;
 
 /*******************************************************************************
 * FUNCTION HEADERS
 *******************************************************************************/
 
-void OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size);
+void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size);
+int OS_msg_queue_create(void ** queue_ptr, int queue_size);
 
 #endif /* OS_MSG_QUEUE_H */

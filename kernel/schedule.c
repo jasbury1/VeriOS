@@ -621,6 +621,8 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 /*******************************************************************************
 * OS Schedule Delay Task
 *
+*   tcb = A pointer to the TCB of the task to delay. Use NULL to delay the
+*         currently running TCB
 *   tick_delay = The amount of ticks to delay the task for.
 * 
 * PURPOSE :
@@ -635,10 +637,9 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 * NOTES: 
 *******************************************************************************/
 
-int OS_schedule_delay_task(const TickType_t tick_delay)
+int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 {
     TickType_t wakeup_time;
-    TCB_t *current_tcb;
 
     /* Scheduler must be running in order to delay a task */
     if(OS_scheduler_running == OS_FALSE) {
@@ -649,27 +650,108 @@ int OS_schedule_delay_task(const TickType_t tick_delay)
     if(tick_delay < 0){
         return OS_ERROR_INVALID_DLY;
     }
-    
+
     portENTER_CRITICAL(&OS_schedule_mutex);
     wakeup_time = tick_delay + OS_tick_counter;
-    current_tcb = OS_current_TCB[xPortGetCoreID()];
+    
+    if(tcb == NULL){
+        tcb = OS_current_TCB[xPortGetCoreID()];
+    }
 
-    /* Remove ourselves from the Ready List */
-    _OS_ready_list_remove(current_tcb);
+    /* Remove ourselves from existing task list */
+    switch(tcb->task_state) {
+        case OS_TASK_STATE_RUNNING:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_READY:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELAYED_TASK;
+        case OS_TASK_STATE_SUSPENDED:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_SUSPENDED_TASK;
+        case OS_TASK_STATE_PENDING_DELETION:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        default:
+            configASSERT(OS_FALSE);
+    }
 
     /* Set the state of the current TCB to delayed */
-    current_tcb->task_state = OS_TASK_STATE_DELAYED;
+    tcb->task_state = OS_TASK_STATE_DELAYED;
 
     /* Add to a list of delayed tasks */
-    current_tcb->delay_wakeup_time = wakeup_time;
-    configASSERT(current_tcb->delay_wakeup_time > OS_tick_counter);
-    _OS_delayed_list_insert(current_tcb);
-    configASSERT(current_tcb->delay_wakeup_time > OS_tick_counter);
-
-    assert(OS_delayed_list.head_ptr != NULL);
+    tcb->delay_wakeup_time = wakeup_time;
+    _OS_delayed_list_insert(tcb);
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
     portYIELD_WITHIN_API();
+    return OS_NO_ERROR;
+}
+
+/*******************************************************************************
+* OS Schedule Suspend Task
+*
+*   tcb = A pointer to the tcb to be suspended
+* 
+* PURPOSE : 
+*
+* RETURN : 
+*
+*   Return an error code or 0 (OS_NO_ERROR) if no error occured
+*
+* NOTES: 
+*
+*******************************************************************************/
+
+/* TODO: consider merging this with delay task and use max delay to suspend */
+int OS_schedule_suspend_task(TCB_t *tcb)
+{
+    /* Scheduler must be running in order to delay a task */
+    if(OS_scheduler_running == OS_FALSE) {
+        return OS_ERROR_SCHEDULER_STOPPED;
+    }
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    if(tcb == NULL) {
+        tcb = OS_current_TCB[xPortGetCoreID()];
+    }
+
+    switch(tcb->task_state) {
+        case OS_TASK_STATE_RUNNING:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_READY:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            _OS_delayed_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_NO_ERROR;
+        case OS_TASK_STATE_PENDING_DELETION:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        default:
+            configASSERT(OS_FALSE);
+    }
+
+    tcb->task_state = OS_TASK_STATE_SUSPENDED;
+    _OS_suspended_list_insert(tcb);
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+
+    if(tcb == OS_current_TCB[xPortGetCoreID()]) {
+        portYIELD_WITHIN_API();
+    }
     return OS_NO_ERROR;
 }
 
@@ -1037,6 +1119,7 @@ void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio )
 	}
 }
 
+/* TODO: This will eventually be depricated and replaced with OS_schedule_suspend_task */
 void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const TickType_t ticks_to_wait)
 {
     TCB_t *cur_tcb;

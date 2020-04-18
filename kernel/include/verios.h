@@ -28,6 +28,8 @@
 
 #define OS_MAX_PRIORITIES 256
 
+#define OS_MAX_MSG_QUEUE_SIZE INT_MAX
+
 #ifndef OS_PRIVILEGE_BIT
     #define OS_PRIVILEGE_BIT ((uint8_t) 0x00)
 #endif /* OS_PRIVILEGE_BIT */ 
@@ -55,9 +57,18 @@ typedef enum OS_error_codes {
     OS_ERROR_INVALID_PRIO,
     OS_ERROR_INVALID_DLY,
 
+    /* Attempting an operation that is not permitted based on the task's current state */
     OS_ERROR_DELETED_TASK,
+    OS_ERROR_DELAYED_TASK,
+    OS_ERROR_SUSPENDED_TASK,
 
+    /* Attempting an operation that is not permitted based on the scheduler's current state */
     OS_ERROR_SCHEDULER_STOPPED,
+
+    /* Msg Queue creation and deletion */
+    OS_ERROR_INVALID_QUEUE_SIZE,
+    OS_ERROR_QUEUE_ALLOC,
+    OS_ERROR_QUEUE_NULL_PTR,
 
     OS_OTHER_ERROR
 } OSError_t;

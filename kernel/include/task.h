@@ -87,6 +87,7 @@ struct OSTaskControlBlock
 
     /* IPC data */
     int msg_queue_size;
+    MessageQueue_t msg_queue;
 
     /* Mutex Data */
     int mutexes_held;
@@ -96,8 +97,10 @@ struct OSTaskControlBlock
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
 
-    /* IPC data */
-    MessageQueue_t msg_queue;
+    /* Data for if the task is in a waiting list */
+    TCB_t *waitlist_next_ptr;
+    TCB_t *waitlist_prev_ptr;
+    struct OSTaskListHeader *waitlist;
 
     /* Thread local storage pointers*/
     TLSPtr_t TLS_table[configNUM_THREAD_LOCAL_STORAGE_POINTERS];
