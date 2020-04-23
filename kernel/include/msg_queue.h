@@ -12,12 +12,14 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
-typedef struct OSTaskListHeader WaitList_t;
+typedef struct OSMessage Message_t;
 
-typedef struct OSMessage {
+struct OSMessage {
     TCB_t *sender;
     void *contents;
-} Message_t;
+
+    Message_t *next_ptr;
+};
 
 typedef struct OSMessageQueue {
     int max_messages;

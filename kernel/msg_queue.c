@@ -36,6 +36,10 @@ PRIVILEGED_DATA static int OS_msg_count = 0;
 
 static void _OS_msg_queue_waitlist_init(WaitList_t *list);
 
+static Message_t* _OS_msg_pool_retrieve(void);
+
+static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg);
+
 /*******************************************************************************
 * OS Message Queue Init
 *
@@ -130,23 +134,83 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 }
 
 /*******************************************************************************
-* OS Message Queue Init
+* OS Message Queue Post
 *
 *   msg_queue = 
-*   queue_size = 
+*   timeout =
+*   data = 
 * 
 * PURPOSE : 
-*   
+*
+*   The main API call for sending a message to a message queue. This function
+*   will block if the queue is full and the task will be placed in a waiting list.
+*   If a timeout is specified and the task times out before room is made in the
+*   queue, the task will be removed from the waitlist and rescheduled without sending
+*   the message.
 * 
 * RETURN :
 *   
 *
 * NOTES: 
+*
+*   If the timeout is equal to the max delay time, the task will be suspended
+*   and assumed to have no timeout
 *******************************************************************************/
 
-void OS_msg_queue_post()
+void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data)
 {
-    
+    Message_t *new_message = NULL;
+    TCB_t *sender = OS_schedule_get_current_tcb();
+
+    configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+
+    while (OS_TRUE) {
+        portENTER_CRITICAL(&(msg_queue->mux));
+        
+        /* Add the message if possible */
+        if (msg_queue->num_messages < msg_queue->max_messages)
+        {
+            new_message = _OS_msg_pool_retrieve();
+
+            if (new_message == NULL)
+            {
+                /* TODO */
+            }
+
+            new_message->sender = sender;
+            new_message->contents = data;
+            new_message->next_ptr = NULL;
+
+            _OS_msg_queue_insert(msg_queue, new_message);
+
+            /* TODO: notify the readers if there are some waiting */
+            portEXIT_CRITICAL(&(msg_queue->mux));
+
+            /* TODO: Is this task in the right list? */
+            return;
+        }
+
+        /* We were unable to add the message due to queue being full */
+        portEXIT_CRITICAL(&(msg_queue->mux));
+
+        /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
+        OS_waitlist_insert_task(sender, &(msg_queue->send_waiters));
+
+        /* If the task is in the ready list, it must be unscheduled and blocked */
+        if(sender->task_state != OS_TASK_STATE_DELAYED && sender->task_state != OS_TASK_STATE_SUSPENDED) {
+            if(timeout == portMAX_DELAY){
+                OS_schedule_suspend_task(sender);
+            }
+            else {
+                OS_schedule_delay_task(sender, timeout);
+            }
+        }
+        /* Yielding didn't happen implicitely when suspending or delaying */
+        else {
+            portYIELD_WITHIN_API();
+        }
+    }
+
 }
 
 /*******************************************************************************
@@ -219,3 +283,27 @@ static void _OS_msg_queue_waitlist_init(WaitList_t *list)
     list->tail_ptr = NULL;
     list->num_tasks = 0;
 }
+
+static Message_t* _OS_msg_pool_retrieve(void)
+{
+    return NULL;
+}
+
+static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg)
+{
+    /* If this is the first message in the queue */
+    if (msg_queue->head_ptr == NULL)
+    {
+        msg_queue->head_ptr = msg;
+        msg_queue->tail_ptr = msg;
+    }
+    /* Add to the tail */
+    else
+    {
+        msg_queue->tail_ptr->next_ptr = msg;
+        msg_queue->tail_ptr = msg;
+    }
+    msg_queue->num_messages++;
+}
+
+

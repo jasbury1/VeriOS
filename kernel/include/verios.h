@@ -79,4 +79,14 @@ struct OSTaskListHeader {
     TCB_t *tail_ptr;
 };
 
+
+typedef struct OSTaskListHeader WaitList_t;
+
+/*******************************************************************************
+* FUNCTION HEADERS
+*******************************************************************************/
+
+
+void OS_waitlist_insert_task(TCB_t *tcb, WaitList_t *waitlist);
+
 #endif /* VERIOS_H */

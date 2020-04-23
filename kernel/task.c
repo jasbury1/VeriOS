@@ -1,5 +1,3 @@
-
-
 /* Standard includes. */
 #include <stdlib.h>
 #include <string.h>
