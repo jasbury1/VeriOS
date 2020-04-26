@@ -739,7 +739,6 @@ int OS_schedule_suspend_task(TCB_t *tcb)
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
         case OS_TASK_STATE_READY_TO_DELETE:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
         default:
             configASSERT(OS_FALSE);
@@ -751,6 +750,77 @@ int OS_schedule_suspend_task(TCB_t *tcb)
 
     if(tcb == OS_current_TCB[xPortGetCoreID()]) {
         portYIELD_WITHIN_API();
+    }
+    return OS_NO_ERROR;
+}
+
+/*******************************************************************************
+* OS Schedule Resume Task
+*
+*   tcb = A pointer to the tcb to be suspended
+* 
+* PURPOSE : 
+*
+* RETURN : 
+*
+*   Return an error code or 0 (OS_NO_ERROR) if no error occured
+*
+* NOTES: 
+*
+*******************************************************************************/
+
+int OS_schedule_resume_task(TCB_t *tcb)
+{
+    int i;
+
+    if(OS_scheduler_running == OS_FALSE) {
+        return OS_ERROR_SCHEDULER_STOPPED;
+    }
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+
+    switch(tcb->task_state) {
+        case OS_TASK_STATE_RUNNING:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_RUNNING_TASK;
+            break;
+        case OS_TASK_STATE_READY:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_READY_TASK;
+            break;
+        case OS_TASK_STATE_DELAYED:
+            _OS_delayed_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            _OS_suspended_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_PENDING_DELETION:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+        default:
+            configASSERT(OS_FALSE);
+    }
+
+    /* Make the resumed task ready */
+    tcb->task_state = OS_TASK_STATE_READY;
+    _OS_ready_list_insert(tcb);
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+    
+    /* Run the resumed task if its priority is greater than any running task */
+    if(tcb->priority > OS_current_TCB[xPortGetCoreID()]) {
+        portYIELD_WITHIN_API();
+    }
+    else {
+        for(i = 0; i < portNUM_PROCESSORS; ++i){
+           if(tcb->priority > OS_current_TCB[i]) {
+               _OS_schedule_yield_other_core(i, tcb->priority); 
+               break;
+           }
+        }
     }
     return OS_NO_ERROR;
 }

@@ -161,6 +161,7 @@ void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void
 {
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
+    TCB_t *waiting_receiver;
 
     configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
 
@@ -183,18 +184,29 @@ void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void
 
             _OS_msg_queue_insert(msg_queue, new_message);
 
-            /* TODO: notify the readers if there are some waiting */
+            /* If tasks are waiting on this message queue, wake them up */
+            if(msg_queue->reveive_waiters.num_tasks != 0){
+                waiting_receiver = OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
+                OS_schedule_resume_task(waiting_receiver);
+            }
+
             portEXIT_CRITICAL(&(msg_queue->mux));
+
+            if(waiting_receiver != NULL){
+                /* Schedule the task that was waiting on a new message */
+
+            }
 
             /* TODO: Is this task in the right list? */
             return;
         }
 
         /* We were unable to add the message due to queue being full */
-        portEXIT_CRITICAL(&(msg_queue->mux));
 
         /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
         OS_waitlist_insert_task(sender, &(msg_queue->send_waiters));
+        
+        portEXIT_CRITICAL(&(msg_queue->mux));
 
         /* If the task is in the ready list, it must be unscheduled and blocked */
         if(sender->task_state != OS_TASK_STATE_DELAYED && sender->task_state != OS_TASK_STATE_SUSPENDED) {

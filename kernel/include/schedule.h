@@ -55,6 +55,8 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay);
 
 int OS_schedule_suspend_task(TCB_t *tcb);
 
+int OS_schedule_resume_task(TCB_t *tcb);
+
 int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio);
 
 void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder);
