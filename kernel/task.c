@@ -291,6 +291,11 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
     tcb->next_ptr = NULL;
     tcb->prev_ptr = NULL;
 
+    /* Initialize waitlist data to null for now */
+    tcb->waitlist = NULL;
+    tcb->waitlist_next_ptr = NULL;
+    tcb->waitlist_prev_ptr = NULL;
+
     /* Take care of event list systems as we are reliant on FreeRTOS for
         Semaphores/queues/timers */
     vListInitialiseItem( &(tcb->xEventListItem ) );

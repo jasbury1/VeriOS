@@ -58,6 +58,8 @@ typedef enum OS_error_codes {
     OS_ERROR_INVALID_DLY,
 
     /* Attempting an operation that is not permitted based on the task's current state */
+    OS_ERROR_READY_TASK,
+    OS_ERROR_RUNNING_TASK,
     OS_ERROR_DELETED_TASK,
     OS_ERROR_DELAYED_TASK,
     OS_ERROR_SUSPENDED_TASK,
@@ -69,6 +71,8 @@ typedef enum OS_error_codes {
     OS_ERROR_INVALID_QUEUE_SIZE,
     OS_ERROR_QUEUE_ALLOC,
     OS_ERROR_QUEUE_NULL_PTR,
+    OS_ERROR_QUEUE_FULL,
+    OS_ERROR_MSG_POOL_RETR,
 
     OS_OTHER_ERROR
 } OSError_t;
@@ -88,5 +92,9 @@ typedef struct OSTaskListHeader WaitList_t;
 
 
 void OS_waitlist_insert_task(TCB_t *tcb, WaitList_t *waitlist);
+
+void OS_waitlist_remove_task(TCB_t *tcb);
+
+TCB_t * OS_waitlist_pop_head(WaitList_t *waitlist);
 
 #endif /* VERIOS_H */

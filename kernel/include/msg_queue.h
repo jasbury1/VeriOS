@@ -44,7 +44,10 @@ typedef struct OSMessagePool {
 * FUNCTION HEADERS
 *******************************************************************************/
 
+int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data);
+
 void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size);
+
 int OS_msg_queue_create(void ** queue_ptr, int queue_size);
 
 #endif /* OS_MSG_QUEUE_H */

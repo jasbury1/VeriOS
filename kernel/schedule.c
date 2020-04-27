@@ -811,12 +811,12 @@ int OS_schedule_resume_task(TCB_t *tcb)
     portEXIT_CRITICAL(&OS_schedule_mutex);
     
     /* Run the resumed task if its priority is greater than any running task */
-    if(tcb->priority > OS_current_TCB[xPortGetCoreID()]) {
+    if(tcb->priority > OS_current_TCB[xPortGetCoreID()]->priority) {
         portYIELD_WITHIN_API();
     }
     else {
         for(i = 0; i < portNUM_PROCESSORS; ++i){
-           if(tcb->priority > OS_current_TCB[i]) {
+           if(tcb->priority > OS_current_TCB[i]->priority) {
                _OS_schedule_yield_other_core(i, tcb->priority); 
                break;
            }
@@ -879,6 +879,11 @@ OSBool_t OS_schedule_process_tick(void)
 		if( listLIST_ITEM_CONTAINER( &(OS_delayed_list.head_ptr->xEventListItem ) ) != NULL ){
 			( void ) uxListRemove( &(OS_delayed_list.head_ptr->xEventListItem ) );
             context_switch_required = OS_TRUE;
+        }
+
+        /* Remove the task from a waiting list if it is on one */
+        if(OS_delayed_list.head_ptr->waitlist != NULL){
+            OS_waitlist_remove_task(OS_delayed_list.head_ptr);
         }
 
         /* Wake up the task */
@@ -1517,9 +1522,7 @@ static void _OS_delayed_list_remove(TCB_t *tcb)
     /* Removing in the middle */
     else {
         configASSERT(OS_delayed_list.num_tasks > 2);
-        configASSERT(tcb->next_ptr != NULL);
-        configASSERT(tcb->prev_ptr != NULL);
-        tcb->next_ptr->prev_ptr = tcb->next_ptr;
+        tcb->next_ptr->prev_ptr = tcb->prev_ptr;
         tcb->prev_ptr->next_ptr = tcb->next_ptr;
     }
     tcb->next_ptr = NULL;

@@ -155,27 +155,30 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 *
 *   If the timeout is equal to the max delay time, the task will be suspended
 *   and assumed to have no timeout
+*   If the sending tasks block, it is up to the next task that reads from the
+*   queue to unblock the next waiting task
 *******************************************************************************/
 
-void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data)
+int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data)
 {
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
-    TCB_t *waiting_receiver;
+    TCB_t *waiting_receiver = NULL;
+    OSBool_t timeout_set = OS_FALSE;
 
     configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
 
     while (OS_TRUE) {
         portENTER_CRITICAL(&(msg_queue->mux));
         
-        /* Add the message if possible */
+        /* Add the message if there is room on the queue */
         if (msg_queue->num_messages < msg_queue->max_messages)
         {
             new_message = _OS_msg_pool_retrieve();
 
             if (new_message == NULL)
             {
-                /* TODO */
+                return OS_ERROR_MSG_POOL_RETR;
             }
 
             new_message->sender = sender;
@@ -187,21 +190,24 @@ void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void
             /* If tasks are waiting on this message queue, wake them up */
             if(msg_queue->reveive_waiters.num_tasks != 0){
                 waiting_receiver = OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
-                OS_schedule_resume_task(waiting_receiver);
             }
 
             portEXIT_CRITICAL(&(msg_queue->mux));
 
             if(waiting_receiver != NULL){
                 /* Schedule the task that was waiting on a new message */
-
+                OS_schedule_resume_task(waiting_receiver);
             }
 
-            /* TODO: Is this task in the right list? */
-            return;
+            return OS_NO_ERROR;
         }
 
         /* We were unable to add the message due to queue being full */
+
+        /* The timeout already went off, but we were unable to find queue room */
+        if(timeout_set == OS_TRUE) {
+            return OS_ERROR_QUEUE_FULL;
+        }
 
         /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
         OS_waitlist_insert_task(sender, &(msg_queue->send_waiters));
@@ -214,6 +220,7 @@ void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void
                 OS_schedule_suspend_task(sender);
             }
             else {
+                timeout_set = OS_TRUE;
                 OS_schedule_delay_task(sender, timeout);
             }
         }
@@ -222,6 +229,7 @@ void OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void
             portYIELD_WITHIN_API();
         }
     }
+    return OS_NO_ERROR;
 
 }
 
