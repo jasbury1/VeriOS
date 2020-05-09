@@ -87,5 +87,7 @@ void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const Tick
 
 void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList, const TickType_t ticks_to_wait);
 
+int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList);
+
 
 #endif /* OS_SCHEDULE_H */ 

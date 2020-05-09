@@ -59,7 +59,6 @@ void vTaskDelayUntil( TickType_t * const pxPreviousWakeTime, const TickType_t xT
 }
 
 UBaseType_t uxTaskPriorityGet( TaskHandle_t xTask ) {
-	configASSERT(0 == 1);
 	return (UBaseType_t)OS_task_get_priority((TCB_t*)xTask);	
 }
 
@@ -73,7 +72,6 @@ eTaskState eTaskGetState( TaskHandle_t xTask ) {
 }
 
 void vTaskPrioritySet( TaskHandle_t xTask, UBaseType_t uxNewPriority ) {
-	configASSERT(0 == 1);
 	OS_schedule_change_task_prio((TCB_t *)xTask, (TaskPrio_t)uxNewPriority);
 }
 
@@ -216,8 +214,7 @@ void vTaskPlaceOnEventListRestricted( List_t * const pxEventList, const TickType
 }
 
 BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList ){
-	configASSERT(0 == 1);
-	return -1;
+	return OS_schedule_remove_task_from_event_list(pxEventList);
 }
 
 BaseType_t xTaskRemoveFromUnorderedEventList( ListItem_t * pxEventListItem, const TickType_t xItemValue ){

@@ -231,7 +231,9 @@ int OS_task_get_core_ID(TCB_t *tcb)
 
 TaskPrio_t OS_task_get_priority(TCB_t *tcb)
 {
-    configASSERT(tcb);
+    if(tcb == NULL){
+        tcb = OS_schedule_get_current_tcb();
+    }
     return tcb->priority;
 }
 

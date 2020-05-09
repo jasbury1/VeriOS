@@ -169,6 +169,9 @@ static portTASK_FUNCTION(OS_idle_task, idle_task_params)
         This right now will automaticallly be done in the remove from ready list func
         */
         //printf("test\n");
+        extern void vApplicationIdleHook( void );
+
+	    vApplicationIdleHook();
     }
 }
 
@@ -374,7 +377,9 @@ void OS_schedule_switch_context(void)
         tcb_swapped_out->task_state = OS_TASK_STATE_READY;
     }
 
-    ready_list_index = _OS_schedule_get_highest_prio();
+    /*ready_list_index = _OS_schedule_get_highest_prio();*/
+    /* TODO: Switch this back */
+    ready_list_index = OS_MAX_PRIORITIES - 1;
     temp = OS_ready_list[ready_list_index].head_ptr;
 
     /* Find the next highest priority task we can run on this core */
@@ -940,6 +945,30 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         portEXIT_CRITICAL(&OS_schedule_mutex);
         return OS_NO_ERROR;
     }
+
+    /* Task must be removed from any list prior to a priority change */
+    switch(tcb->task_state) {
+        case OS_TASK_STATE_RUNNING:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_READY:
+            _OS_ready_list_remove(tcb);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            break;
+        case OS_TASK_STATE_PENDING_DELETION:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+            break;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_DELETED_TASK;
+            break;
+        default:
+            return OS_ERROR_INVALID_TSK_STATE;
+    }
     
     if(tcb->base_priority == tcb->priority){
         tcb->priority = new_prio;
@@ -966,29 +995,9 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         context_switch_required = OS_TRUE;
     }
 
-    switch(tcb->task_state) {
-        case OS_TASK_STATE_RUNNING:
-            _OS_ready_list_remove(tcb);
-            _OS_ready_list_insert(tcb);
-            break;
-        case OS_TASK_STATE_READY:
-            _OS_ready_list_remove(tcb);
-            _OS_ready_list_insert(tcb);
-            break;
-        case OS_TASK_STATE_DELAYED:
-            break;
-        case OS_TASK_STATE_SUSPENDED:
-            break;
-        case OS_TASK_STATE_PENDING_DELETION:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_DELETED_TASK;
-            break;
-        case OS_TASK_STATE_READY_TO_DELETE:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_DELETED_TASK;
-            break;
-        default:
-            configASSERT(OS_FALSE);
+    /* We can re-add to the ready list now that the priority is changed */
+    if(tcb->task_state == OS_TASK_STATE_READY || tcb->task_state == OS_TASK_STATE_RUNNING) {
+        _OS_ready_list_insert(tcb);
     }
 
     if(context_switch_required == OS_TRUE){
@@ -1089,6 +1098,9 @@ OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder)
                     _OS_ready_list_remove(mutex_holder);
                     break;
                 case OS_TASK_STATE_DELAYED:
+                    configASSERT(1 == 0);
+                    break;
+                case OS_TASK_STATE_SUSPENDED:
                     configASSERT(1 == 0);
                     break;
                 case OS_TASK_STATE_PENDING_DELETION:
@@ -1228,7 +1240,8 @@ void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const Tick
     portEXIT_CRITICAL(&OS_schedule_mutex);
 }
 
-void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList, const TickType_t ticks_to_wait){
+void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList, const TickType_t ticks_to_wait)
+{
     TickType_t wakeup_time; 
     TCB_t *cur_tcb;
 
@@ -1250,6 +1263,123 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
     cur_tcb->task_state = OS_TASK_STATE_DELAYED;
 
 	portEXIT_CRITICAL(&OS_schedule_mutex);
+}
+
+int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
+{
+    TCB_t *unblocked_tcb;
+    int ret_val;
+    OSBool_t task_can_be_ready;
+    int i, target_cpu;
+
+    portENTER_CRITICAL_ISR(&OS_schedule_mutex);
+	/* The event list is sorted in priority order, so the first in the list can
+	be removed as it is known to be the highest priority.  Remove the TCB from
+	the delayed list, and add it to the ready list.
+
+	If an event is for a queue that is locked then this function will never
+	get called - the lock count on the queue will get modified instead.  This
+	means exclusive access to the event list is guaranteed here.
+
+	This function assumes that a check has already been made to ensure that
+	pxEventList is not empty. */
+	if ( ( listLIST_IS_EMPTY( pxEventList ) ) == pdFALSE ) {
+	    unblocked_tcb = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( pxEventList );
+		configASSERT( unblocked_tcb );
+		( void ) uxListRemove( &( unblocked_tcb->xEventListItem ) );
+	} else {
+		portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
+		return pdFALSE;
+	}
+
+    /* Determine if the task can possibly be run on either CPU now, either because the scheduler
+	   the task is pinned to is running or because a scheduler is running on any CPU. */
+	task_can_be_ready = OS_FALSE;
+	if ( unblocked_tcb->core_ID == CORE_NO_AFFINITY ) {
+		target_cpu = xPortGetCoreID();
+		for (i = 0; i < portNUM_PROCESSORS; i++) {
+			if ( OS_suspended_schedulers_list[ i ] == OS_FALSE) {
+				task_can_be_ready = OS_TRUE;
+				break;
+			}
+		}
+	} else {
+		target_cpu = unblocked_tcb->core_ID;
+		task_can_be_ready = OS_suspended_schedulers_list[target_cpu] == OS_FALSE;
+	}
+
+    if( task_can_be_ready == OS_TRUE )
+	{
+        switch(unblocked_tcb->task_state){
+           case OS_TASK_STATE_RUNNING:
+                configASSERT(0 == 1);
+                break;
+            case OS_TASK_STATE_READY:
+                configASSERT(0 == 1);
+                break;
+            case OS_TASK_STATE_DELAYED:
+                _OS_delayed_list_remove(unblocked_tcb);
+                break;
+            case OS_TASK_STATE_SUSPENDED:
+                _OS_suspended_list_remove(unblocked_tcb);
+                break;
+            case OS_TASK_STATE_PENDING_DELETION:
+                configASSERT(1 == 0);
+                break;
+            case OS_TASK_STATE_READY_TO_DELETE:
+                configASSERT(1 == 0);
+                break;
+            default:
+                configASSERT(1 == 0); 
+        }
+        _OS_ready_list_insert(unblocked_tcb);
+	}
+	else
+	{
+		/* The delayed and ready lists cannot be accessed, so hold this task
+		pending until the scheduler is resumed on this CPU. */
+		/* vListInsertEnd( &( xPendingReadyList[ uxTargetCPU ] ), &( pxUnblockedTCB->xEventListItem ) );*/
+        /* TODO */
+        configASSERT(OS_FALSE);
+	}
+
+	if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
+	{
+		/* Return true if the task removed from the event list has a higher
+		priority than the calling task.  This allows the calling task to know if
+		it should force a context switch now. */
+		ret_val = pdTRUE;
+
+		/* Mark that a yield is pending in case the user is not using the
+		"xHigherPriorityTaskWoken" parameter to an ISR safe FreeRTOS function. */
+		OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+	}
+	else if ( unblocked_tcb->core_ID != xPortGetCoreID() )
+	{
+		_OS_schedule_yield_other_core(unblocked_tcb->core_ID, unblocked_tcb->priority);
+		ret_val = pdFALSE;
+	}
+	else
+	{
+		ret_val = pdFALSE;
+	}
+
+	#if( configUSE_TICKLESS_IDLE == 1 )
+	{
+		/* If a task is blocked on a kernel object then xNextTaskUnblockTime
+		might be set to the blocked task's time out time.  If the task is
+		unblocked for a reason other than a timeout xNextTaskUnblockTime is
+		normally left unchanged, because it is automatically get reset to a new
+		value when the tick count equals xNextTaskUnblockTime.  However if
+		tickless idling is used it might be more important to enter sleep mode
+		at the earliest possible time - so reset xNextTaskUnblockTime here to
+		ensure it is updated at the earliest possible time. */
+        _OS_update_next_task_unblock_time();
+	}
+	#endif
+	portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
+
+	return ret_val;
 }
 
 /*******************************************************************************

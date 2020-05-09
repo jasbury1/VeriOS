@@ -40,6 +40,8 @@ static Message_t* _OS_msg_pool_retrieve(void);
 
 static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg);
 
+static Message_t * _OS_msg_queue_pop(MessageQueue_t *msg_queue);
+
 /*******************************************************************************
 * OS Message Queue Init
 *
@@ -248,9 +250,54 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 * NOTES: 
 *******************************************************************************/
 
-void OS_msg_queue_pend()
+void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 {
+    OSBool_t timeout_set = OS_FALSE;
+    Message_t *retrieved_message = NULL;
+    TCB_t *receiver = OS_schedule_get_current_tcb();
+    TCB_t *waiting_sender = NULL;
 
+    while(OS_TRUE) {
+        portENTER_CRITICAL(&(msg_queue->mux));
+
+        /* There is a message on the queue that we can retrieve */
+        if(msg_queue->num_messages > 0) {
+            retrieved_message = _OS_msg_queue_pop(msg_queue);
+
+            if(retrieved_message == NULL){
+                /* TODO */
+            }
+
+            /* TODO Add back to the pool */
+        }
+
+        /* We were unable to read because no messages were sent */
+
+        /* The timeout already went off, but no messages were added to the queue */
+        if(timeout_set == OS_TRUE) {
+            return NULL;
+        }
+
+        /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
+        OS_waitlist_insert_task(receiver, &(msg_queue->reveive_waiters));
+        
+        portEXIT_CRITICAL(&(msg_queue->mux));
+
+        /* If the task is in the ready list, it must be unscheduled and blocked */
+        if(receiver->task_state != OS_TASK_STATE_DELAYED && receiver->task_state != OS_TASK_STATE_SUSPENDED) {
+            if(timeout == portMAX_DELAY){
+                OS_schedule_suspend_task(receiver);
+            }
+            else {
+                timeout_set = OS_TRUE;
+                OS_schedule_delay_task(receiver, timeout);
+            }
+        }
+        /* Yielding didn't happen implicitely when suspending or delaying */
+        else {
+            portYIELD_WITHIN_API();
+        }
+    }
 }
 
 /*******************************************************************************
@@ -324,6 +371,11 @@ static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg)
         msg_queue->tail_ptr = msg;
     }
     msg_queue->num_messages++;
+}
+
+static Message_t * _OS_msg_queue_pop(MessageQueue_t *msg_queue)
+{
+    return NULL;
 }
 
 
