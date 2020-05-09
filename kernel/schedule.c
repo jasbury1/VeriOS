@@ -377,9 +377,7 @@ void OS_schedule_switch_context(void)
         tcb_swapped_out->task_state = OS_TASK_STATE_READY;
     }
 
-    /*ready_list_index = _OS_schedule_get_highest_prio();*/
-    /* TODO: Switch this back */
-    ready_list_index = OS_MAX_PRIORITIES - 1;
+    ready_list_index = _OS_schedule_get_highest_prio();
     temp = OS_ready_list[ready_list_index].head_ptr;
 
     /* Find the next highest priority task we can run on this core */
@@ -1442,8 +1440,8 @@ static int _OS_schedule_get_highest_prio(void)
     while(OS_ready_priorities_map[++map_index] == (uint8_t)0 && map_index < OS_PRIO_MAP_SIZE);
 
     if(map_index == OS_PRIO_MAP_SIZE){
-        /* TODO */
         /* No priorities in use in the map */
+        return 0;
     }
 
     /* Count the leading zeros in the bit map index that contains a priority */
@@ -1453,7 +1451,7 @@ static int _OS_schedule_get_highest_prio(void)
         ++leading_zeros;
     }
 
-    return((OS_MAX_PRIORITIES - 1) - ((map_index * 8) + leading_zeros));
+    return((OS_MAX_PRIORITIES) - ((map_index * 8) + leading_zeros));
 }
 
 /**
