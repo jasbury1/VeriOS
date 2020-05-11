@@ -136,7 +136,7 @@ static void _OS_ready_list_remove(TCB_t *old_tcb);
 
 static void _OS_deletion_pending_list_insert(TCB_t *tcb);
 
-static void _OS_deletion_pending_list_remove(TCB_t *tcb);
+static void _OS_deletion_pending_list_empty();
 
 static void _OS_delayed_list_insert(TCB_t *tcb);
 
@@ -156,22 +156,18 @@ static void _OS_update_next_task_unblock_time(void);
 
 static void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio );
 
+/*******************************************************************************
+* IDLE TASK
+*******************************************************************************/
 
-/**
- * The IDLE Task
- * TODO: Rewrite and move into Task.c
- */
-static portTASK_FUNCTION(OS_idle_task, idle_task_params)
+void OS_IDLE_TASK(void * idle_task_param)
 {
-    (void) idle_task_params;
     for(;;) {
-        /* DONT WORRY ABOUT DECREMENTING NUMBER OF TASKS HERE
-        This right now will automaticallly be done in the remove from ready list func
-        */
-        //printf("test\n");
-        extern void vApplicationIdleHook( void );
-
-	    vApplicationIdleHook();
+        if(OS_deletion_pending_list.num_tasks != 0) {
+            /* _OS_deletion_pending_list_empty(); */
+        }
+        extern void vApplicationIdleHook(void);
+        vApplicationIdleHook();
     }
 }
 
@@ -198,7 +194,7 @@ int OS_schedule_start(void)
     int ret_val;
 
     for(i = 0; i < portNUM_PROCESSORS; ++i) {
-        ret_val = OS_task_create(OS_idle_task, NULL, OS_IDLE_NAME, 0, OS_IDLE_STACK_SIZE, 
+        ret_val = OS_task_create(OS_IDLE_TASK, NULL, OS_IDLE_NAME, 0, OS_IDLE_STACK_SIZE, 
                                     0, i, (void **)(&OS_idle_tcb_list[i]));
         if(ret_val != OS_NO_ERROR){
             return ret_val;
@@ -1568,9 +1564,13 @@ static void _OS_deletion_pending_list_insert(TCB_t *tcb)
     OS_deletion_pending_list.num_tasks++;
 }
 
-static void _OS_deletion_pending_list_remove(TCB_t *tcb)
+static void _OS_deletion_pending_list_empty()
 {
-    /* TODO */
+    TCB_t * tcb = OS_deletion_pending_list.head_ptr;
+    while(OS_deletion_pending_list.num_tasks > 0){
+        configASSERT(OS_FALSE);
+        /* TODO */
+    }
 }
 
 static void _OS_delayed_list_insert(TCB_t *tcb)

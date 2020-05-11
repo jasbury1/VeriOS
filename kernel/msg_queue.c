@@ -25,10 +25,13 @@ task.h is included from an application file. */
 * SCHEDULER CRITICAL STATE VARIABLES
 *******************************************************************************/
 
-PRIVILEGED_DATA static MessagePool_t OS_msg_pool = {0, NULL, NULL};
+/* A list of messages for use/reuse. Works similar to 'slab allocation' */
+PRIVILEGED_DATA static volatile MessagePool_t OS_msg_pool = {0, NULL, NULL};
 
 /* A counter of all messages that have been allocated and exist in various places */
-PRIVILEGED_DATA static int OS_msg_count = 0;
+PRIVILEGED_DATA static volatile int OS_msg_count = 0;
+
+PRIVILEGED_DATA static portMUX_TYPE OS_message_mutex = portMUX_INITIALIZER_UNLOCKED;
 
 /*******************************************************************************
 * STATIC FUNCTION DECLARATIONS
@@ -37,6 +40,8 @@ PRIVILEGED_DATA static int OS_msg_count = 0;
 static void _OS_msg_queue_waitlist_init(WaitList_t *list);
 
 static Message_t* _OS_msg_pool_retrieve(void);
+
+static void _OS_msg_pool_insert(Message_t *msg);
 
 static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg);
 
@@ -70,6 +75,7 @@ void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size)
     _OS_msg_queue_waitlist_init(&(msg_queue->send_waiters));
 
     vPortCPUInitializeMutex(&msg_queue->mux);
+
 }
 
 /*******************************************************************************
@@ -138,9 +144,9 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 /*******************************************************************************
 * OS Message Queue Post
 *
-*   msg_queue = 
-*   timeout =
-*   data = 
+*   msg_queue = A pointer to the message queue to send the message to
+*   timeout = Max amount of time to wait if the queue is full
+*   data = A pointer to the data the message is carrying. Usually allocated
 * 
 * PURPOSE : 
 *
@@ -151,7 +157,8 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 *   the message.
 * 
 * RETURN :
-*   
+*
+*   Return an error message or 0 (OS_NO_ERROR) if no error occured   
 *
 * NOTES: 
 *
@@ -168,6 +175,8 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
     TCB_t *waiting_receiver = NULL;
     OSBool_t timeout_set = OS_FALSE;
 
+    assert(msg_queue);
+
     configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
 
     while (OS_TRUE) {
@@ -176,8 +185,11 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
         /* Add the message if there is room on the queue */
         if (msg_queue->num_messages < msg_queue->max_messages)
         {
+            
+            portENTER_CRITICAL(&OS_message_mutex);
             new_message = _OS_msg_pool_retrieve();
-
+            portEXIT_CRITICAL(&OS_message_mutex);
+            
             if (new_message == NULL)
             {
                 return OS_ERROR_MSG_POOL_RETR;
@@ -238,16 +250,25 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 /*******************************************************************************
 * OS Message Queue Init
 *
-*   msg_queue = 
-*   queue_size = 
+*   msg_queue = The message queue to read from
+*   timeout = The amount of time to wait for a message if the queue is empty
 * 
 * PURPOSE : 
-*   
+*
+*   The main API call for reading a message from a message queue. This function
+*   will block if the queue is empty and the task will be placed in a waiting list.
+*   If a timeout is specified and the task times out before a message is added in the
+*   queue, the task will be removed from the waitlist and rescheduled without reading
+*   any message.   
 * 
 * RETURN :
-*   
+*
+*   Returns a void pointer to the data read from the message. Returns a NULL ptr
+*   if it the queue remained empty for the duration of the timeout   
 *
 * NOTES: 
+*
+*   Use portMAX_DELAY as the timeout if this call should not time out
 *******************************************************************************/
 
 void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
@@ -257,18 +278,34 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
     TCB_t *receiver = OS_schedule_get_current_tcb();
     TCB_t *waiting_sender = NULL;
 
+    void *msg_contents;
+
     while(OS_TRUE) {
         portENTER_CRITICAL(&(msg_queue->mux));
 
         /* There is a message on the queue that we can retrieve */
         if(msg_queue->num_messages > 0) {
             retrieved_message = _OS_msg_queue_pop(msg_queue);
+            msg_contents = retrieved_message->contents;
 
-            if(retrieved_message == NULL){
-                /* TODO */
+            /* We are done with this message. Add to the pool for future re-use */
+            portENTER_CRITICAL(&OS_message_mutex);
+            _OS_msg_pool_insert(retrieved_message);
+            portEXIT_CRITICAL(&OS_message_mutex);
+
+            /* If tasks are waiting on this message queue, wake them up */
+            if(msg_queue->send_waiters.num_tasks != 0){
+                waiting_sender = OS_waitlist_pop_head(&(msg_queue->send_waiters));
             }
 
-            /* TODO Add back to the pool */
+            portEXIT_CRITICAL(&(msg_queue->mux));
+
+            if(waiting_sender != NULL){
+                /* Schedule the task that was waiting on a new message */
+                OS_schedule_resume_task(waiting_sender);
+            }
+
+            return msg_contents;
         }
 
         /* We were unable to read because no messages were sent */
@@ -315,9 +352,52 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 * NOTES: 
 *******************************************************************************/
 
-void OS_msg_queue_try_pend()
+int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
 {
+    Message_t *new_message = NULL;
+    TCB_t *sender = OS_schedule_get_current_tcb();
+    TCB_t *waiting_receiver = NULL;
+    OSBool_t timeout_set = OS_FALSE;
 
+    configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+
+    while (OS_TRUE) {
+        portENTER_CRITICAL(&(msg_queue->mux));
+        
+        /* Add the message if there is room on the queue */
+        if (msg_queue->num_messages < msg_queue->max_messages)
+        {
+            portENTER_CRITICAL(&OS_message_mutex);
+            new_message = _OS_msg_pool_retrieve();
+            portEXIT_CRITICAL(&OS_message_mutex);
+
+            if (new_message == NULL)
+            {
+                return OS_ERROR_MSG_POOL_RETR;
+            }
+
+            new_message->sender = sender;
+            new_message->contents = data;
+            new_message->next_ptr = NULL;
+
+            _OS_msg_queue_insert(msg_queue, new_message);
+
+            /* If tasks are waiting on this message queue, wake them up */
+            if(msg_queue->reveive_waiters.num_tasks != 0){
+                waiting_receiver = OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
+            }
+
+            portEXIT_CRITICAL(&(msg_queue->mux));
+
+            if(waiting_receiver != NULL){
+                /* Schedule the task that was waiting on a new message */
+                OS_schedule_resume_task(waiting_receiver);
+            }
+
+            return OS_NO_ERROR;
+        }
+    }
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -335,9 +415,9 @@ void OS_msg_queue_try_pend()
 * NOTES: 
 *******************************************************************************/
 
-void OS_msg_queue_try_post()
+int OS_msg_queue_try_receive()
 {
-
+    return -1;
 }
 
 /*******************************************************************************
@@ -351,9 +431,61 @@ static void _OS_msg_queue_waitlist_init(WaitList_t *list)
     list->num_tasks = 0;
 }
 
+static void _OS_msg_pool_insert(Message_t *msg)
+{
+    /* The message pool is empty */
+    if(OS_msg_pool.num_messages == 0) {
+        OS_msg_pool.head_ptr = msg;
+        OS_msg_pool.tail_ptr = msg;
+    }
+    /* The message pool isn't empty. Add to the tail */
+    else {
+        OS_msg_pool.tail_ptr->next_ptr = msg;
+        OS_msg_pool.tail_ptr = msg;
+    }
+    OS_msg_pool.tail_ptr->next_ptr = NULL;
+    OS_msg_pool.num_messages++;
+    assert(OS_msg_pool.head_ptr);
+}
+
 static Message_t* _OS_msg_pool_retrieve(void)
 {
-    return NULL;
+    Message_t *msg;
+    int i;
+    int size;
+
+    /* Our pool is empty so we have to allocate another slab of messages */
+    if(OS_msg_pool.num_messages == 0){
+        /* First allocation is a fixed size. Later allocations double the size */
+        //size = OS_msg_count == 0 ? OS_MSG_POOL_INITIAL_SIZE : OS_msg_count;
+        size = 8;
+
+        OS_msg_pool.head_ptr = pvPortMalloc(sizeof(Message_t) * size);
+        assert(OS_msg_pool.head_ptr);
+
+        /* Connect the newly allocated messages as a pool list */
+        for(i = 0; i < size - 1; ++i) {
+            (&(OS_msg_pool.head_ptr)[i])->next_ptr = &(OS_msg_pool.head_ptr)[i + 1];
+        }
+        (OS_msg_pool.head_ptr)[size - 1].next_ptr = NULL;
+        OS_msg_pool.tail_ptr = &((OS_msg_pool.head_ptr)[size - 1]);
+        OS_msg_pool.num_messages = size;
+
+        OS_msg_count += size;
+    }
+
+    OS_msg_pool.num_messages--;
+    /* Remove the head of the list to return as the message for use */
+    assert(OS_msg_pool.head_ptr);
+    msg = OS_msg_pool.head_ptr;
+
+    OS_msg_pool.head_ptr = OS_msg_pool.head_ptr->next_ptr;
+    if(OS_msg_pool.head_ptr == NULL){
+        assert(OS_msg_pool.num_messages == 0);
+    }
+    msg->next_ptr = NULL;
+    return msg;
+
 }
 
 static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg)
@@ -370,12 +502,26 @@ static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg)
         msg_queue->tail_ptr->next_ptr = msg;
         msg_queue->tail_ptr = msg;
     }
+    msg->next_ptr = NULL;
     msg_queue->num_messages++;
 }
 
 static Message_t * _OS_msg_queue_pop(MessageQueue_t *msg_queue)
 {
-    return NULL;
+    Message_t * msg; 
+    assert(msg_queue->num_messages > 0);
+
+    msg = msg_queue->head_ptr;
+    msg_queue->head_ptr = msg_queue->head_ptr->next_ptr;
+    msg->next_ptr = NULL;
+    
+    /* If we only had one message in the queue, update the tail */
+    if(msg_queue->head_ptr == NULL) {
+        msg_queue->tail_ptr = NULL;
+    }
+    msg_queue->num_messages--;
+
+    return msg;
 }
 
 
