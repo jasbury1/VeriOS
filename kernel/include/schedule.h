@@ -89,5 +89,8 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
 
 int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList);
 
+void OS_schedule_set_task_TLS_ptr(TCB_t *tcb, int index, 
+        void *value, TLSPtrDeleteCallback_t callback);
+
 
 #endif /* OS_SCHEDULE_H */ 

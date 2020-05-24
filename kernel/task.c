@@ -37,7 +37,7 @@ privileged Vs unprivileged linkage and placement. */
 *******************************************************************************/
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
-        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID, int msg_queue_size);
+        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID);
 
 static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_alloc, 
         TaskFunc_t task_func, void *task_arg, TaskPrio_t prio);
@@ -82,6 +82,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
         return OS_ERROR_RESERVED_PRIORITY;
     }
 
+
     /* Make sure the stack size is valid */
     if(stack_size <= 0) {
         return OS_ERROR_INVALID_STKSIZE;
@@ -106,7 +107,7 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     }
 
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
-    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID, msg_queue_size);
+    _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID);
     
     /* Set up the task's IPC system */
     _OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
@@ -187,6 +188,7 @@ int OS_task_delete(TCB_t *tcb)
 
 char * OS_task_get_name(TCB_t *tcb)
 {
+    assert(3 == 9);
     configASSERT(tcb);
     return &(tcb->task_name[0]);
 }
@@ -209,6 +211,7 @@ char * OS_task_get_name(TCB_t *tcb)
 
 int OS_task_get_core_ID(TCB_t *tcb)
 {
+    assert(3 == 9);
     configASSERT(tcb);
     return tcb->core_ID;
 }
@@ -235,6 +238,91 @@ TaskPrio_t OS_task_get_priority(TCB_t *tcb)
         tcb = OS_schedule_get_current_tcb();
     }
     return tcb->priority;
+}
+
+/*******************************************************************************
+* OS Task Get Priority
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the priority of the desired task
+* 
+* RETURN :
+*
+*   The priority assigned to the task
+*
+* NOTES: 
+*******************************************************************************/
+
+void *OS_task_get_TLS_ptr(TCB_t *tcb, int index)
+{
+    if(index >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) {
+        return NULL;
+    } 
+    if(tcb == NULL) {
+        tcb = OS_schedule_get_current_tcb();
+    }
+    assert(tcb);
+    return tcb->TLS_table[index];
+}
+
+/*******************************************************************************
+* OS Task Get Priority
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the priority of the desired task
+* 
+* RETURN :
+*
+*   The priority assigned to the task
+*
+* NOTES: 
+*******************************************************************************/
+
+int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data)
+{
+    assert(3 == 9);
+    int ret_val;
+    if(tcb->msg_queue.max_messages <= 0) {
+        return OS_ERROR_NO_TASK_QUEUE;
+    }
+
+    ret_val = OS_msg_queue_post(&(tcb->msg_queue), timeout, data);
+    return ret_val;
+}
+
+/*******************************************************************************
+* OS Task Get Priority
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the priority of the desired task
+* 
+* RETURN :
+*
+*   The priority assigned to the task
+*
+* NOTES: 
+*******************************************************************************/
+
+void * OS_task_receive_msg(TickType_t timeout)
+{
+    assert(3 == 9);
+    TCB_t *cur_tcb;
+    void * msg;
+
+    cur_tcb = OS_schedule_get_current_tcb();
+    assert(cur_tcb);
+
+    msg = OS_msg_queue_pend(&(cur_tcb->msg_queue), timeout);
+    return msg;
 }
 
 /*******************************************************************************
@@ -277,7 +365,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
 }
 
 static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio_t prio, int stack_size, 
-        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID, int msg_queue_size)
+        OSBool_t is_static, const MemoryRegion_t * const mem_region, int core_ID)
 {
     int i;
 
@@ -285,7 +373,6 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
     tcb->priority = prio;
     tcb->base_priority = prio;
     tcb->core_ID = core_ID;
-    tcb->msg_queue_size = msg_queue_size;
     tcb->mutexes_held = 0;
     tcb->delay_wakeup_time = 0;
     
@@ -311,6 +398,12 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
 			break;
 		}
 	}
+
+    /* Initialize the TLS table to null */
+    for( i = 0; i < configNUM_THREAD_LOCAL_STORAGE_POINTERS; ++i) {
+        tcb->TLS_table[i] = NULL;
+        tcb->TLS_delete_callback_table[i] = NULL;
+    }
 
     esp_reent_init(&tcb->xNewLib_reent);
 

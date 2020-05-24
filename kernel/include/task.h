@@ -14,7 +14,7 @@
 * MACROS
 *******************************************************************************/
 
-#define CORE_NO_AFFINITY -1
+#define CORE_NO_AFFINITY INT_MAX
 
 #define OS_STACK_FILL_BYTE	( 0xa5U )
 
@@ -86,7 +86,6 @@ struct OSTaskControlBlock
     char task_name[OS_MAX_TASK_NAME];
 
     /* IPC data */
-    int msg_queue_size;
     MessageQueue_t msg_queue;
 
     /* Mutex Data */
@@ -132,5 +131,9 @@ int OS_task_delete(TCB_t *tcb);
 char * OS_task_get_name(TCB_t *tcb);
 
 int OS_task_get_core_ID(TCB_t *tcb);
+
+TaskPrio_t OS_task_get_priority(TCB_t *tcb);
+
+void *OS_task_get_TLS_ptr(TCB_t *tcb, int index);
 
 #endif /* OS_TASK_H */

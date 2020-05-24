@@ -25,14 +25,15 @@ BaseType_t xTaskCreatePinnedToCore(	TaskFunction_t pvTaskCode,
 										UBaseType_t uxPriority,
 										TaskHandle_t * const pvCreatedTask,
 										const BaseType_t xCoreID){
-											
+    const int core_ID = ((xCoreID >= 2 || xCoreID < 0) ? CORE_NO_AFFINITY : xCoreID);
+
     int res = OS_task_create((TaskFunc_t) pvTaskCode,
 							 pvParameters,
 							 pcName,
 							 (TaskPrio_t)uxPriority,
 							 usStackDepth,
 							 0,
-							 xCoreID,
+							 core_ID,
 							 pvCreatedTask);
 	if(res == 0){
 		return pdPASS;
@@ -138,11 +139,11 @@ void vTaskSetThreadLocalStoragePointer( TaskHandle_t xTaskToSet, BaseType_t xInd
 }
 
 void *pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery, BaseType_t xIndex ) {
-	configASSERT(0 == 1);
+	return OS_task_get_TLS_ptr((TCB_t *)(xTaskToQuery), xIndex);
 }
 
 void vTaskSetThreadLocalStoragePointerAndDelCallback( TaskHandle_t xTaskToSet, BaseType_t xIndex, void *pvValue, TlsDeleteCallbackFunction_t pvDelCallback){
-	configASSERT(0 == 1);
+	OS_schedule_set_task_TLS_ptr((TCB_t *)xTaskToSet, xIndex, pvValue, pvDelCallback);
 }
 
 BaseType_t xTaskCallApplicationTaskHook( TaskHandle_t xTask, void *pvParameter ) {
@@ -268,8 +269,7 @@ BaseType_t xTaskGetSchedulerState( void ){
 }
 
 void vTaskPriorityInherit( TaskHandle_t const pxMutexHolder ) {
-	configASSERT(0 == 1);
-	return;
+	OS_schedule_raise_priority_mutex_holder((TCB_t *)pxMutexHolder);
 }
 
 UBaseType_t uxTaskGetTaskNumber( TaskHandle_t xTask ) {

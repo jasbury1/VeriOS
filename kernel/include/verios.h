@@ -74,6 +74,9 @@ typedef enum OS_error_codes {
     OS_ERROR_QUEUE_FULL,
     OS_ERROR_MSG_POOL_RETR,
 
+    /* Task IPC */
+    OS_ERROR_NO_TASK_QUEUE,
+
     OS_OTHER_ERROR
 } OSError_t;
 

@@ -152,6 +152,8 @@ static void _OS_delayed_tasks_cycle_overflow(void);
 
 static void _OS_pending_ready_list_schedule_next_task(void);
 
+static void _OS_pending_ready_list_insert(TCB_t *tcb, int core_ID);
+
 static void _OS_update_next_task_unblock_time(void);
 
 static void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio );
@@ -236,6 +238,7 @@ int OS_schedule_start(void)
 
 void OS_schedule_stop()
 {
+    assert(3 == 9);
     /* Stop the scheduler interrupts and call the portable scheduler end
 	routine so the original ISRs can be restored if necessary.*/
     portDISABLE_INTERRUPTS();
@@ -294,7 +297,7 @@ OSBool_t OS_schedule_resume(void)
     OS_suspended_schedulers_list[xPortGetCoreID()]--;
     
     /* Nothing to do if we are still in nested suspension or have no tasks */
-    if(OS_suspended_schedulers_list[xPortGetCoreID()] == OS_TRUE ||
+    if(OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE ||
        OS_num_tasks == 0) {
         portEXIT_CRITICAL(&OS_schedule_mutex); 
         return yield_occured;
@@ -373,17 +376,17 @@ void OS_schedule_switch_context(void)
         tcb_swapped_out->task_state = OS_TASK_STATE_READY;
     }
 
+    /* Cycle the round robin position of the task that finished running */
+    if(tcb_swapped_out->task_state == OS_TASK_STATE_READY && tcb_swapped_out->priority != 0) {
+        _OS_ready_list_remove(tcb_swapped_out);
+        _OS_ready_list_insert(tcb_swapped_out);
+    }
+
     ready_list_index = _OS_schedule_get_highest_prio();
     temp = OS_ready_list[ready_list_index].head_ptr;
 
     /* Find the next highest priority task we can run on this core */
     while(ready_list_index > 0 && tcb_to_run == NULL) {
-
-        /* We don't need to switch tasks. The current task still gets priority */
-        if(ready_list_index < tcb_swapped_out->priority && tcb_swapped_out->task_state == OS_TASK_STATE_READY) {
-            tcb_to_run = tcb_swapped_out;
-            break;
-        }
 
         /* No valid task to run at this priority */
         if(temp == NULL) {
@@ -404,12 +407,6 @@ void OS_schedule_switch_context(void)
     /* See if we need to run IDLE */
     if(tcb_to_run == NULL){
         tcb_to_run = OS_idle_tcb_list[core_ID];
-    }
-    /* Update its round robin position */
-    else {
-        /* TODO: This can become one function for efficiency */
-        _OS_ready_list_remove(tcb_to_run);
-        _OS_ready_list_insert(tcb_to_run);
     }
 
     tcb_to_run->task_state = OS_TASK_STATE_RUNNING;
@@ -711,6 +708,7 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 /* TODO: consider merging this with delay task and use max delay to suspend */
 int OS_schedule_suspend_task(TCB_t *tcb)
 {
+    assert(3 == 9);
     /* Scheduler must be running in order to delay a task */
     if(OS_scheduler_running == OS_FALSE) {
         return OS_ERROR_SCHEDULER_STOPPED;
@@ -743,12 +741,27 @@ int OS_schedule_suspend_task(TCB_t *tcb)
             configASSERT(OS_FALSE);
     }
 
+    if( listLIST_ITEM_CONTAINER( &( tcb->xEventListItem ) ) != NULL )
+	{
+		( void ) uxListRemove( &( tcb->xEventListItem ) );
+	}
+
     tcb->task_state = OS_TASK_STATE_SUSPENDED;
     _OS_suspended_list_insert(tcb);
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
     if(tcb == OS_current_TCB[xPortGetCoreID()]) {
-        portYIELD_WITHIN_API();
+        if(OS_scheduler_running == OS_TRUE){
+            portYIELD_WITHIN_API();
+        }
+        else {
+            /* TODO */
+            assert(OS_FALSE);
+        }
+    }
+    else {
+        /* TODO */
+        assert(OS_FALSE);
     }
     return OS_NO_ERROR;
 }
@@ -770,6 +783,7 @@ int OS_schedule_suspend_task(TCB_t *tcb)
 
 int OS_schedule_resume_task(TCB_t *tcb)
 {
+    assert(3 == 9);
     int i;
 
     if(OS_scheduler_running == OS_FALSE) {
@@ -856,7 +870,7 @@ OSBool_t OS_schedule_process_tick(void)
     }
 
     /* Any core can unwind pending ticks while resuming all tasks */
-    if( OS_suspended_schedulers_list[ xPortGetCoreID() ] == OS_TRUE) {
+    if( OS_suspended_schedulers_list[ xPortGetCoreID() ] != OS_FALSE) {
         ++OS_pending_ticks;
         return context_switch_required;
     }
@@ -1039,7 +1053,7 @@ void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
 		listSET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) OS_current_TCB[ xPortGetCoreID() ]->priority);
 	}
 
-    if(mutex_holder->task_state == OS_TASK_STATE_READY || mutex_holder->task_state == OS_TASK_STATE_RUNNING) {
+    if(mutex_holder->task_state == OS_TASK_STATE_READY) {
         _OS_ready_list_remove(mutex_holder);
         mutex_holder->priority = OS_current_TCB[xPortGetCoreID()]->priority;
         _OS_ready_list_insert(mutex_holder);
@@ -1083,39 +1097,20 @@ OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder)
 		if(mutex_holder->mutexes_held == 0) {
 			portENTER_CRITICAL(&OS_schedule_mutex);
 
-            /* TODO Error if its blocked or whatever probably */
-			switch(mutex_holder->task_state) {
-                case OS_TASK_STATE_RUNNING:
-                    _OS_ready_list_remove(mutex_holder);
-                    break;
-                case OS_TASK_STATE_READY:
-                    _OS_ready_list_remove(mutex_holder);
-                    break;
-                case OS_TASK_STATE_DELAYED:
-                    configASSERT(1 == 0);
-                    break;
-                case OS_TASK_STATE_SUSPENDED:
-                    configASSERT(1 == 0);
-                    break;
-                case OS_TASK_STATE_PENDING_DELETION:
-                    configASSERT(1 == 0);
-                    break;
-                case OS_TASK_STATE_READY_TO_DELETE:
-                    configASSERT(1 == 0);
-                    break;
-                default:
-                    configASSERT(1 == 0);
+            if(mutex_holder->task_state == OS_TASK_STATE_READY || 
+                    mutex_holder->task_state == OS_TASK_STATE_RUNNING) {
+                _OS_ready_list_remove(mutex_holder);
+                mutex_holder->priority = mutex_holder->base_priority;
+                _OS_ready_list_insert(mutex_holder);
             }
-
-			/* Disinherit the priority before adding the task into the
-			new	ready list. */
-			mutex_holder->priority = mutex_holder->base_priority;
+            else {
+                mutex_holder->priority = mutex_holder->base_priority;
+            }
 
 			/* Reset the event list item value.  It cannot be in use for
 			any other purpose if this task is running, and it must be
 			running to give back the mutex. */
             listSET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) mutex_holder->priority ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
-            _OS_ready_list_insert(mutex_holder);
 
 			ret_val = OS_TRUE;
 			portEXIT_CRITICAL(&OS_schedule_mutex);
@@ -1123,6 +1118,34 @@ OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder)
 	}
     portEXIT_CRITICAL(&OS_schedule_mutex);
     return ret_val;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+void OS_schedule_set_task_TLS_ptr(TCB_t *tcb, int index, 
+        void *value, TLSPtrDeleteCallback_t callback)
+{
+    if(tcb == NULL) {
+        tcb = OS_schedule_get_current_tcb();
+    }
+
+    if(index < configNUM_THREAD_LOCAL_STORAGE_POINTERS) {
+        portENTER_CRITICAL(&OS_schedule_mutex);
+        tcb->TLS_table[index] = value;
+        tcb->TLS_delete_callback_table[index] = callback;
+        portEXIT_CRITICAL(&OS_schedule_mutex);
+    }
+
 }
 
 /*******************************************************************************
@@ -1184,6 +1207,7 @@ void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio )
 
 	if (core_ID != CORE_NO_AFFINITY) {
 		if ( cur_tcb->priority < prio ) {
+            assert(core_ID < portNUM_PROCESSORS);
 			vPortYieldOtherCore( core_ID );
 		}
 	}
@@ -1327,14 +1351,13 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
                 configASSERT(1 == 0); 
         }
         _OS_ready_list_insert(unblocked_tcb);
+        unblocked_tcb->task_state = OS_TASK_STATE_READY;
 	}
 	else
 	{
 		/* The delayed and ready lists cannot be accessed, so hold this task
 		pending until the scheduler is resumed on this CPU. */
-		/* vListInsertEnd( &( xPendingReadyList[ uxTargetCPU ] ), &( pxUnblockedTCB->xEventListItem ) );*/
-        /* TODO */
-        configASSERT(OS_FALSE);
+        _OS_pending_ready_list_insert(unblocked_tcb, target_cpu);
 	}
 
 	if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
@@ -1595,6 +1618,8 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
     if(OS_delayed_list.head_ptr == NULL) {
         OS_delayed_list.head_ptr = tcb;
         OS_delayed_list.tail_ptr = tcb;
+        tcb->prev_ptr = NULL;
+        tcb->next_ptr = NULL;
         _OS_update_next_task_unblock_time();
         return;
     }
@@ -1604,6 +1629,7 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
         tcb->next_ptr = OS_delayed_list.head_ptr;
         OS_delayed_list.head_ptr->prev_ptr = tcb;
         OS_delayed_list.head_ptr = tcb;
+        _OS_update_next_task_unblock_time();
         return;
     }
     /* This task is the last one to get woken up */
@@ -1616,7 +1642,7 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
     }
     /* Else, find the spot to place this task */
     tcb1 = OS_delayed_list.head_ptr;
-    while(tcb1->delay_wakeup_time <= tcb->delay_wakeup_time){
+    while(tcb1->delay_wakeup_time < tcb->delay_wakeup_time){
         tcb1 = tcb1->next_ptr;
     }
     tcb2 = tcb1->prev_ptr;
@@ -1655,11 +1681,14 @@ static void _OS_delayed_list_remove(TCB_t *tcb)
     }
     tcb->next_ptr = NULL;
     tcb->prev_ptr = NULL;
-    OS_suspended_list.num_tasks--;
+    OS_delayed_list.num_tasks--;
 }
 
 static void _OS_suspended_list_insert(TCB_t *tcb)
 {
+    tcb->next_ptr = NULL;
+    tcb->prev_ptr = NULL;
+
     /* First entry */
     if(OS_suspended_list.num_tasks == 0){
         OS_suspended_list.head_ptr = tcb;
@@ -1727,6 +1756,7 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
     } 
     else {
         OS_delayed_list.head_ptr = woken_task->next_ptr;
+        assert(OS_delayed_list.head_ptr);
         OS_delayed_list.head_ptr->prev_ptr = NULL;
         OS_delayed_list.num_tasks--;
     }
@@ -1753,28 +1783,50 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
  */
 static void _OS_pending_ready_list_schedule_next_task(void)
 {
-    ReadyList_t pending_ready_list = OS_pending_ready_list[xPortGetCoreID()];
-    TCB_t *scheduled_tcb = pending_ready_list.head_ptr;
+    int core_ID = xPortGetCoreID();
+    TCB_t *scheduled_tcb = OS_pending_ready_list[core_ID].head_ptr;
+    assert(scheduled_tcb != NULL);
 
     /* If this is the only entry on the pending ready list */
-    if(pending_ready_list.num_tasks == 1){
-        pending_ready_list.head_ptr = NULL;
-        pending_ready_list.tail_ptr = NULL;
-        pending_ready_list.num_tasks = 0;        
+    if(OS_pending_ready_list[core_ID].num_tasks == 1){
+        OS_pending_ready_list[core_ID].head_ptr = NULL;
+        OS_pending_ready_list[core_ID].tail_ptr = NULL;
+        OS_pending_ready_list[core_ID].num_tasks = 0;        
     }
     else {
-        pending_ready_list.head_ptr = scheduled_tcb->next_ptr;
-        pending_ready_list.head_ptr->prev_ptr = NULL;
-        pending_ready_list.num_tasks--;
+        OS_pending_ready_list[core_ID].head_ptr = scheduled_tcb->next_ptr;
+        OS_pending_ready_list[core_ID].head_ptr->prev_ptr = NULL;
+        OS_pending_ready_list[core_ID].num_tasks--;
     }
+	( void ) uxListRemove( &( scheduled_tcb->xEventListItem ) );
+
 
     /* Place on the ready list */
     _OS_ready_list_insert(scheduled_tcb);
     scheduled_tcb->task_state = OS_TASK_STATE_READY;
 
-    if(scheduled_tcb->priority >= OS_current_TCB[xPortGetCoreID()]->priority) {
-        OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
+    if(scheduled_tcb->priority >= OS_current_TCB[core_ID]->priority) {
+        OS_yield_pending_list[core_ID] = OS_TRUE;
     }
+}
+
+static void _OS_pending_ready_list_insert(TCB_t *tcb, int core_ID)
+{
+    tcb->next_ptr = NULL;
+    tcb->prev_ptr = NULL;
+
+    /* First entry */
+    if(OS_pending_ready_list[core_ID].num_tasks == 0){
+        OS_pending_ready_list[core_ID].head_ptr = tcb;
+        OS_pending_ready_list[core_ID].tail_ptr = tcb;
+        OS_pending_ready_list[core_ID].num_tasks = 1;
+        return;
+    }
+    /* Add to the end */
+    OS_pending_ready_list[core_ID].tail_ptr->next_ptr = tcb;
+    tcb->prev_ptr = OS_pending_ready_list[core_ID].tail_ptr;
+    OS_pending_ready_list[core_ID].tail_ptr = tcb;
+    OS_pending_ready_list[core_ID].num_tasks++;
 }
 
 TCB_t* OS_schedule_get_idle_tcb(int core_ID)
@@ -1815,7 +1867,7 @@ OSScheduleState_t OS_schedule_get_state(void)
     if (OS_scheduler_running == OS_FALSE) {
         current_state = OS_SCHEDULE_STATE_STOPPED;
     }
-    else if (OS_suspended_schedulers_list[xPortGetCoreID()] == OS_TRUE) {
+    else if (OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE) {
         current_state = OS_SCHEDULE_STATE_SUSPENDED;
     }
     else {
