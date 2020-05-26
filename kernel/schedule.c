@@ -570,11 +570,6 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
         default:
             configASSERT(OS_FALSE);
     }
-
-    /* Necessary since we use FreeRTOS events lists (for now) */
-    if( listLIST_ITEM_CONTAINER( &( old_tcb->xEventListItem ) ) != NULL ){
-		( void ) uxListRemove( &( old_tcb->xEventListItem ) );
-    }
         
     /* Update task counters */
     OS_num_tasks--;
@@ -597,16 +592,23 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
         _OS_deletion_pending_list_insert(old_tcb);
     }
 
+    /* Necessary since we use FreeRTOS events lists (for now) */
+    if( listLIST_ITEM_CONTAINER( &( old_tcb->xEventListItem ) ) != NULL ){
+		( void ) uxListRemove( &( old_tcb->xEventListItem ) );
+    }
+
     /* Force a reschedule if the conditions require it */
     if(OS_scheduler_running == OS_TRUE){
         /* If the task is running on this core */
         if(old_tcb == OS_current_TCB[xPortGetCoreID()]){
             portYIELD_WITHIN_API();
         }
-        /* Yield if the task was running on any other core */
-        for(i = 0; i < portNUM_PROCESSORS; ++i){
-            if(OS_current_TCB[i] == old_tcb){
-                vPortYieldOtherCore(i);
+        else {
+            /* Yield if the task was running on any other core */
+            for(i = 0; i < portNUM_PROCESSORS; ++i){
+               if(OS_current_TCB[i] == old_tcb){
+                   vPortYieldOtherCore(i);
+               }
             }
         }
     }
@@ -740,13 +742,13 @@ int OS_schedule_suspend_task(TCB_t *tcb)
         default:
             configASSERT(OS_FALSE);
     }
+    tcb->task_state = OS_TASK_STATE_SUSPENDED;
 
     if( listLIST_ITEM_CONTAINER( &( tcb->xEventListItem ) ) != NULL )
 	{
 		( void ) uxListRemove( &( tcb->xEventListItem ) );
 	}
 
-    tcb->task_state = OS_TASK_STATE_SUSPENDED;
     _OS_suspended_list_insert(tcb);
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
@@ -864,6 +866,7 @@ OSBool_t OS_schedule_process_tick(void)
         vApplicationTickHook();
 
         /* Only core 0 can increment the tick count */
+        /* TODO: Try saying != 0 and make it return context switch required */
         if (xPortGetCoreID() == 1 ) {
 			return OS_TRUE;
 		}
@@ -981,6 +984,13 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
     if(tcb->base_priority == tcb->priority){
         tcb->priority = new_prio;
     }
+    /* TODO: THIS IS A NEW LINE! Double check it */
+    tcb->base_priority = new_prio;
+
+    /* We can re-add to the ready list now that the priority is changed */
+    if(tcb->task_state == OS_TASK_STATE_READY || tcb->task_state == OS_TASK_STATE_RUNNING) {
+        _OS_ready_list_insert(tcb);
+    }
 
     if( ( listGET_LIST_ITEM_VALUE( &( tcb->xEventListItem ) ) & taskEVENT_LIST_ITEM_VALUE_IN_USE ) == 0UL ){
 		listSET_LIST_ITEM_VALUE( &( tcb->xEventListItem ), ( ( TickType_t ) configMAX_PRIORITIES - ( TickType_t )new_prio) );
@@ -1001,11 +1011,6 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
     /* Reducing the priority of the current task */
     if(old_prio > new_prio && tcb == OS_current_TCB[xPortGetCoreID()]) {
         context_switch_required = OS_TRUE;
-    }
-
-    /* We can re-add to the ready list now that the priority is changed */
-    if(tcb->task_state == OS_TASK_STATE_READY || tcb->task_state == OS_TASK_STATE_RUNNING) {
-        _OS_ready_list_insert(tcb);
     }
 
     if(context_switch_required == OS_TRUE){
@@ -1035,7 +1040,8 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
 
 void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
 {
-    configASSERT(mutex_holder->task_state != OS_TASK_STATE_RUNNING);
+    /* TODO: remove this later: */
+    //configASSERT(mutex_holder->task_state != OS_TASK_STATE_RUNNING);
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
@@ -1053,7 +1059,7 @@ void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
 		listSET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) OS_current_TCB[ xPortGetCoreID() ]->priority);
 	}
 
-    if(mutex_holder->task_state == OS_TASK_STATE_READY) {
+    if(mutex_holder->task_state == OS_TASK_STATE_READY || mutex_holder->task_state == OS_TASK_STATE_RUNNING) {
         _OS_ready_list_remove(mutex_holder);
         mutex_holder->priority = OS_current_TCB[xPortGetCoreID()]->priority;
         _OS_ready_list_insert(mutex_holder);
@@ -1273,6 +1279,9 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
     if(cur_tcb->task_state == OS_TASK_STATE_READY || cur_tcb->task_state == OS_TASK_STATE_RUNNING){
         _OS_ready_list_remove(cur_tcb);
     }
+    else {
+        assert(OS_FALSE);
+    }
 
 	wakeup_time = OS_tick_counter + ticks_to_wait;
 
@@ -1283,9 +1292,44 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
 	portEXIT_CRITICAL(&OS_schedule_mutex);
 }
 
+void OS_schedule_place_task_on_unordered_events_list(List_t *pxEventList, const TickType_t item_value, const TickType_t ticks_to_wait)
+{
+    TickType_t wakeup_time;
+    TCB_t * cur_tcb;
+
+    configASSERT(pxEventList);
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+
+    cur_tcb = OS_current_TCB[xPortGetCoreID()];
+
+    listSET_LIST_ITEM_VALUE( &( cur_tcb->xEventListItem ), item_value | taskEVENT_LIST_ITEM_VALUE_IN_USE );
+    vListInsertEnd( pxEventList, &( cur_tcb->xEventListItem ) );
+    
+    if(cur_tcb->task_state == OS_TASK_STATE_READY || cur_tcb->task_state == OS_TASK_STATE_RUNNING){
+        _OS_ready_list_remove(cur_tcb);
+    }
+    else {
+        assert(OS_FALSE);
+    }
+
+    if(ticks_to_wait == portMAX_DELAY) {
+        _OS_suspended_list_insert(cur_tcb);
+        cur_tcb->task_state = OS_TASK_STATE_SUSPENDED;
+    }
+    else {
+        wakeup_time = OS_tick_counter + ticks_to_wait;
+        cur_tcb->delay_wakeup_time = wakeup_time;
+        _OS_delayed_list_insert(cur_tcb);
+        cur_tcb->task_state = OS_TASK_STATE_DELAYED;
+    }
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+}
+
 int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 {
-    TCB_t *unblocked_tcb;
+    TCB_t *unblocked_tcb = NULL;
     int ret_val;
     OSBool_t task_can_be_ready;
     int i, target_cpu;
@@ -1326,30 +1370,31 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 		task_can_be_ready = OS_suspended_schedulers_list[target_cpu] == OS_FALSE;
 	}
 
+    switch(unblocked_tcb->task_state){
+        case OS_TASK_STATE_RUNNING:
+            configASSERT(0 == 1);
+            break;
+        case OS_TASK_STATE_READY:
+            configASSERT(0 == 1);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            _OS_delayed_list_remove(unblocked_tcb);
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            _OS_suspended_list_remove(unblocked_tcb);
+            break;
+        case OS_TASK_STATE_PENDING_DELETION:
+            configASSERT(1 == 0);
+            break;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            configASSERT(1 == 0);
+            break;
+        default:
+            configASSERT(1 == 0); 
+    }
+
     if( task_can_be_ready == OS_TRUE )
 	{
-        switch(unblocked_tcb->task_state){
-           case OS_TASK_STATE_RUNNING:
-                configASSERT(0 == 1);
-                break;
-            case OS_TASK_STATE_READY:
-                configASSERT(0 == 1);
-                break;
-            case OS_TASK_STATE_DELAYED:
-                _OS_delayed_list_remove(unblocked_tcb);
-                break;
-            case OS_TASK_STATE_SUSPENDED:
-                _OS_suspended_list_remove(unblocked_tcb);
-                break;
-            case OS_TASK_STATE_PENDING_DELETION:
-                configASSERT(1 == 0);
-                break;
-            case OS_TASK_STATE_READY_TO_DELETE:
-                configASSERT(1 == 0);
-                break;
-            default:
-                configASSERT(1 == 0); 
-        }
         _OS_ready_list_insert(unblocked_tcb);
         unblocked_tcb->task_state = OS_TASK_STATE_READY;
 	}
@@ -1358,6 +1403,7 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 		/* The delayed and ready lists cannot be accessed, so hold this task
 		pending until the scheduler is resumed on this CPU. */
         _OS_pending_ready_list_insert(unblocked_tcb, target_cpu);
+        unblocked_tcb->task_state = OS_TASK_STATE_PENDING_READY;
 	}
 
 	if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
@@ -1395,6 +1441,85 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 	}
 	#endif
 	portEXIT_CRITICAL_ISR(&OS_schedule_mutex);
+
+	return ret_val;
+}
+
+int OS_schedule_remove_task_from_unordered_events_list(ListItem_t * pxEventListItem, const TickType_t item_value)
+{
+    TCB_t *unblocked_tcb;
+    int ret_val;
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    configASSERT(OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE);
+
+    listSET_LIST_ITEM_VALUE( pxEventListItem, item_value | taskEVENT_LIST_ITEM_VALUE_IN_USE );
+
+    unblocked_tcb = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxEventListItem );
+	configASSERT(unblocked_tcb);
+	( void ) uxListRemove( pxEventListItem );
+
+    switch(unblocked_tcb->task_state){
+        case OS_TASK_STATE_RUNNING:
+            configASSERT(0 == 1);
+            break;
+        case OS_TASK_STATE_READY:
+            configASSERT(0 == 1);
+            break;
+        case OS_TASK_STATE_DELAYED:
+            _OS_delayed_list_remove(unblocked_tcb);
+            break;
+        case OS_TASK_STATE_SUSPENDED:
+            _OS_suspended_list_remove(unblocked_tcb);
+            break;
+        case OS_TASK_STATE_PENDING_DELETION:
+            configASSERT(1 == 0);
+            break;
+        case OS_TASK_STATE_READY_TO_DELETE:
+            configASSERT(1 == 0);
+            break;
+        default:
+            configASSERT(1 == 0); 
+    }
+    unblocked_tcb->task_state = OS_TASK_STATE_READY;
+    _OS_ready_list_insert(unblocked_tcb);
+
+    if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
+	{
+		/* Return true if the task removed from the event list has
+		a higher priority than the calling task.  This allows
+		the calling task to know if it should force a context
+		switch now. */
+		ret_val = pdTRUE;
+
+		/* Mark that a yield is pending in case the user is not using the
+		"xHigherPriorityTaskWoken" parameter to an ISR safe FreeRTOS function. */
+		OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+	}
+	else if ( unblocked_tcb->core_ID != xPortGetCoreID() )
+	{
+		_OS_schedule_yield_other_core( unblocked_tcb->core_ID, unblocked_tcb->priority );
+		ret_val = pdFALSE;
+	}
+	else
+	{
+		ret_val = pdFALSE;
+	}
+
+	portEXIT_CRITICAL(&OS_schedule_mutex);
+	return ret_val;
+}
+
+TickType_t OS_schedule_reset_task_event_item_value(void)
+{
+    TickType_t ret_val;
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    ret_val = listGET_LIST_ITEM_VALUE( &( OS_current_TCB[ xPortGetCoreID() ]->xEventListItem ) );
+
+	/* Reset the event list item to its normal value - so it can be used with
+	queues and semaphores. */
+	listSET_LIST_ITEM_VALUE( &( OS_current_TCB[ xPortGetCoreID() ]->xEventListItem ), ( ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) OS_current_TCB[ xPortGetCoreID() ]->priority ) ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
+	portEXIT_CRITICAL(&OS_schedule_mutex);
 
 	return ret_val;
 }
@@ -1516,7 +1641,9 @@ static void _OS_ready_list_init(void)
  */
 static void _OS_ready_list_insert(TCB_t *new_tcb)
 {
-    /* If this is the first task in this priority bracket */
+    assert(new_tcb->next_ptr == NULL);
+    assert(new_tcb->prev_ptr == NULL);
+
     int prio = new_tcb->priority;
 
     new_tcb->next_ptr = NULL;
@@ -1560,7 +1687,7 @@ static void _OS_ready_list_remove(TCB_t *old_tcb)
         configASSERT(OS_ready_list[old_tcb->priority].num_tasks > 2);
         configASSERT(old_tcb->next_ptr != NULL);
         configASSERT(old_tcb->prev_ptr != NULL);
-        old_tcb->next_ptr->prev_ptr = old_tcb->next_ptr;
+        old_tcb->next_ptr->prev_ptr = old_tcb->prev_ptr;
         old_tcb->prev_ptr->next_ptr = old_tcb->next_ptr;
     }
     old_tcb->next_ptr = NULL;
@@ -1570,8 +1697,8 @@ static void _OS_ready_list_remove(TCB_t *old_tcb)
 
 static void _OS_deletion_pending_list_insert(TCB_t *tcb)
 {
-    tcb->next_ptr = NULL;
-    tcb->prev_ptr = NULL;
+    assert(tcb->next_ptr == NULL);
+    assert(tcb->prev_ptr == NULL);
 
     /* First entry */
     if(OS_deletion_pending_list.num_tasks == 0){
@@ -1598,6 +1725,9 @@ static void _OS_deletion_pending_list_empty()
 
 static void _OS_delayed_list_insert(TCB_t *tcb)
 {
+    assert(tcb->next_ptr == NULL);
+    assert(tcb->prev_ptr == NULL);
+
     TCB_t *tcb1;
     TCB_t *tcb2;
 
@@ -1655,6 +1785,7 @@ static void _OS_delayed_list_insert(TCB_t *tcb)
 
 static void _OS_delayed_list_remove(TCB_t *tcb)
 {
+    assert(tcb->task_state == OS_TASK_STATE_DELAYED);
     OS_num_tasks_delayed--;
 
     /* Removing the only task */
@@ -1686,8 +1817,8 @@ static void _OS_delayed_list_remove(TCB_t *tcb)
 
 static void _OS_suspended_list_insert(TCB_t *tcb)
 {
-    tcb->next_ptr = NULL;
-    tcb->prev_ptr = NULL;
+    assert(tcb->next_ptr == NULL);
+    assert(tcb->prev_ptr == NULL);
 
     /* First entry */
     if(OS_suspended_list.num_tasks == 0){
@@ -1705,6 +1836,8 @@ static void _OS_suspended_list_insert(TCB_t *tcb)
 
 static void _OS_suspended_list_remove(TCB_t *tcb)
 {
+    assert(tcb->task_state == OS_TASK_STATE_SUSPENDED);
+
     /* Removing the only task */
     if(OS_suspended_list.num_tasks == 1){
         OS_suspended_list.head_ptr = NULL;
@@ -1725,7 +1858,7 @@ static void _OS_suspended_list_remove(TCB_t *tcb)
         configASSERT(OS_suspended_list.num_tasks > 2);
         configASSERT(tcb->next_ptr != NULL);
         configASSERT(tcb->prev_ptr != NULL);
-        tcb->next_ptr->prev_ptr = tcb->next_ptr;
+        tcb->next_ptr->prev_ptr = tcb->prev_ptr;
         tcb->prev_ptr->next_ptr = tcb->next_ptr;
     }
     tcb->next_ptr = NULL;
@@ -1740,11 +1873,10 @@ static void _OS_suspended_list_remove(TCB_t *tcb)
  * Returns True if a context switch is required after the wakeup. False otherwise.
  */
 static OSBool_t _OS_delayed_list_wakeup_next_task(void)
-{
-    /* TODO: assert the head of the list is not empty */
-    
-    TCB_t *woken_task = OS_delayed_list.head_ptr;
+{    
     OSBool_t context_switch_required = OS_FALSE;
+    TCB_t *woken_task = OS_delayed_list.head_ptr;
+    assert(woken_task != NULL);
 
     --OS_num_tasks_delayed;
 
@@ -1765,9 +1897,10 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
     if(woken_task->priority >= OS_current_TCB[xPortGetCoreID()]->priority){
         context_switch_required = OS_TRUE;
     }
-    /* TODO: Remove from events list if it is on one */
 
     /* place task on the ready list */
+    woken_task->next_ptr = NULL;
+    woken_task->prev_ptr = NULL;
     woken_task->task_state = OS_TASK_STATE_READY;
     _OS_ready_list_insert(woken_task);
 
@@ -1798,22 +1931,25 @@ static void _OS_pending_ready_list_schedule_next_task(void)
         OS_pending_ready_list[core_ID].head_ptr->prev_ptr = NULL;
         OS_pending_ready_list[core_ID].num_tasks--;
     }
-	( void ) uxListRemove( &( scheduled_tcb->xEventListItem ) );
+	//( void ) uxListRemove( &( scheduled_tcb->xEventListItem ) );
 
 
     /* Place on the ready list */
-    _OS_ready_list_insert(scheduled_tcb);
+    scheduled_tcb->next_ptr = NULL;
+    scheduled_tcb->prev_ptr = NULL;
     scheduled_tcb->task_state = OS_TASK_STATE_READY;
+    _OS_ready_list_insert(scheduled_tcb);
 
-    if(scheduled_tcb->priority >= OS_current_TCB[core_ID]->priority) {
+    /* TODO First part of if statement should be unnecessary. Remove */
+    if((scheduled_tcb->core_ID == xPortGetCoreID() || scheduled_tcb->core_ID == CORE_NO_AFFINITY) && (scheduled_tcb->priority >= OS_current_TCB[core_ID]->priority)) {
         OS_yield_pending_list[core_ID] = OS_TRUE;
     }
 }
 
 static void _OS_pending_ready_list_insert(TCB_t *tcb, int core_ID)
 {
-    tcb->next_ptr = NULL;
-    tcb->prev_ptr = NULL;
+    assert(tcb->next_ptr == NULL);
+    assert(tcb->prev_ptr == NULL);
 
     /* First entry */
     if(OS_pending_ready_list[core_ID].num_tasks == 0){

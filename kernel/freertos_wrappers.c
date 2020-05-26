@@ -207,7 +207,7 @@ void vTaskPlaceOnEventList( List_t * const pxEventList, const TickType_t xTicksT
 }
 
 void vTaskPlaceOnUnorderedEventList( List_t * pxEventList, const TickType_t xItemValue, const TickType_t xTicksToWait ){
-	configASSERT(0 == 1);
+	OS_schedule_place_task_on_unordered_events_list(pxEventList, xItemValue, xTicksToWait);
 }
 
 void vTaskPlaceOnEventListRestricted( List_t * const pxEventList, const TickType_t xTicksToWait ){
@@ -219,8 +219,7 @@ BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList ){
 }
 
 BaseType_t xTaskRemoveFromUnorderedEventList( ListItem_t * pxEventListItem, const TickType_t xItemValue ){
-	configASSERT(0 == 1);
-	return -1;
+	return OS_schedule_remove_task_from_unordered_events_list(pxEventListItem, xItemValue);
 }
 
 void vTaskSwitchContext( void ){
@@ -228,8 +227,7 @@ void vTaskSwitchContext( void ){
 }
 
 TickType_t uxTaskResetEventItemValue( void ){
-	configASSERT(0 == 1);
-	return (TickType_t)-1;
+	return OS_schedule_reset_task_event_item_value();
 }
 
 TaskHandle_t xTaskGetCurrentTaskHandle( void ){
