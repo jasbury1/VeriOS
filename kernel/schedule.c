@@ -202,12 +202,13 @@ int OS_schedule_start(void)
             return ret_val;
         }
     }
-    /* TODO: change to our own API in the future */
+    /* TODO: we use FreeRTOS timer APIs. change to our own API in the future */
     ret_val = xTimerCreateTimerTask();
     if(ret_val != 1){
         return ret_val;
     }
 
+    /* Set up the scheduler tick counter */
     portDISABLE_INTERRUPTS();
     OS_tick_counter = ( TickType_t ) 0U;
     portCONFIGURE_TIMER_FOR_RUN_TIME_STATS();
@@ -238,7 +239,6 @@ int OS_schedule_start(void)
 
 void OS_schedule_stop()
 {
-    assert(3 == 9);
     /* Stop the scheduler interrupts and call the portable scheduler end
 	routine so the original ISRs can be restored if necessary.*/
     portDISABLE_INTERRUPTS();
@@ -290,7 +290,7 @@ void OS_schedule_suspend(void)
 OSBool_t OS_schedule_resume(void)
 {
     OSBool_t yield_occured = OS_FALSE;
-    configASSERT(OS_suspended_schedulers_list[xPortGetCoreID()] >= OS_TRUE);
+    assert(OS_suspended_schedulers_list[xPortGetCoreID()] >= OS_TRUE);
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
@@ -354,7 +354,6 @@ void OS_schedule_switch_context(void)
 
     state = portENTER_CRITICAL_NESTED();
 
-   /* TODO: inconsistent use of core_ID and get core ID */ 
     core_ID = xPortGetCoreID();
 
     /* Do not switch context if we are suspended! */
@@ -367,7 +366,7 @@ void OS_schedule_switch_context(void)
     OS_yield_pending_list[core_ID] = OS_FALSE;
     OS_switching_context_list[core_ID] = OS_TRUE;
 
-    /* TODO: check for stack overflow */
+    /* TODO: check for stack overflow one day */
 
     vPortCPUAcquireMutex(&OS_schedule_mutex);
 
@@ -377,8 +376,10 @@ void OS_schedule_switch_context(void)
     }
 
     /* Cycle the round robin position of the task that finished running */
-    if(tcb_swapped_out->task_state == OS_TASK_STATE_READY && tcb_swapped_out->priority != 0) {
+    if(tcb_swapped_out->task_state == OS_TASK_STATE_READY && 
+            tcb_swapped_out->priority != 0) {
         _OS_ready_list_remove(tcb_swapped_out);
+        /* Inserting always inserts in the back of the respective ready list */
         _OS_ready_list_insert(tcb_swapped_out);
     }
 
@@ -451,7 +452,6 @@ int OS_schedule_add_task(TCB_t *new_tcb)
     portENTER_CRITICAL(&OS_schedule_mutex);
 
     core_ID = new_tcb->core_ID;
-
     new_tcb->task_state = OS_TASK_STATE_READY;
     
     /* If there is no affinity with which core it is placed on */
@@ -461,7 +461,8 @@ int OS_schedule_add_task(TCB_t *new_tcb)
 
         /* If there is a core that can run it now, place it there */
         for(i = 0; i < portNUM_PROCESSORS; ++i) {
-            if(OS_current_TCB[i] == NULL || OS_current_TCB[i]-> priority < new_tcb->priority) {
+            if(OS_current_TCB[i] == NULL || 
+                    OS_current_TCB[i]-> priority < new_tcb->priority) {
                 core_ID = i;
                 break;
             }
@@ -478,7 +479,8 @@ int OS_schedule_add_task(TCB_t *new_tcb)
         new_tcb->task_state = OS_TASK_STATE_RUNNING;
     }
 
-    /* Make this task the current if its priority is the highest and the scheduler isn't running */
+    /* Make this task the current if its priority is the highest 
+    priority and the scheduler isn't running */
     else if(OS_scheduler_running == OS_FALSE){
         if(OS_current_TCB[core_ID]->priority <= new_tcb->priority) {
             OS_current_TCB[core_ID]->task_state = OS_TASK_STATE_READY;
@@ -491,6 +493,7 @@ int OS_schedule_add_task(TCB_t *new_tcb)
     ++OS_num_tasks;
     _OS_ready_list_insert(new_tcb);
 
+    /* Nothing else to do it the schedule is not running */
     if(OS_scheduler_running == OS_FALSE) {
         portEXIT_CRITICAL(&OS_schedule_mutex);
         return OS_NO_ERROR;
@@ -528,7 +531,7 @@ int OS_schedule_add_task(TCB_t *new_tcb)
 *
 * NOTES: 
 *
-*   Use delay or suspend API calls instead if the task removal is not permanent
+*   User code should use OS_task_delete instead of this function directly
 *******************************************************************************/
 
 int OS_schedule_remove_task(TCB_t *old_tcb)
@@ -546,6 +549,7 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
         return OS_ERROR_IDLE_DELETE;
 	}
 
+    /* Remove from any state lists */
     switch(old_tcb->task_state) {
         case OS_TASK_STATE_RUNNING:
             _OS_ready_list_remove(old_tcb);
@@ -562,13 +566,11 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
         case OS_TASK_STATE_PENDING_DELETION:
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DOUBLE_DELETE;
-            break;
         case OS_TASK_STATE_READY_TO_DELETE:
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DOUBLE_DELETE;
-            break;
         default:
-            configASSERT(OS_FALSE);
+            return OS_ERROR_INVALID_TSK_STATE;
     }
         
     /* Update task counters */
@@ -626,7 +628,7 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 * PURPOSE :
 *
 *   Delay the task the amount of ticks specified. Just forces a reschedule if the
-*   delay value is zero or below
+*   delay value is zero
 * 
 * RETURN : 
 *
@@ -637,6 +639,7 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 
 int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 {
+    int i;
     TickType_t wakeup_time;
 
     /* Scheduler must be running in order to delay a task */
@@ -677,7 +680,7 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
         default:
-            configASSERT(OS_FALSE);
+            return OS_ERROR_INVALID_TSK_STATE;
     }
 
     /* Set the state of the current TCB to delayed */
@@ -688,16 +691,43 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
     _OS_delayed_list_insert(tcb);
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
-    portYIELD_WITHIN_API();
+    
+    /* Yield if we suspended the TCB on this core */
+    if(tcb == OS_current_TCB[xPortGetCoreID()]) {
+        if(OS_scheduler_running == OS_TRUE){
+            portYIELD_WITHIN_API();
+        }
+        else {
+            OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
+        }
+    }
+
+    /* Yield if we suspended the TCB on another core */
+    else {
+        for(i = 0; i < portNUM_PROCESSORS; ++i){
+            if(tcb == OS_current_TCB[i]) {
+                if(OS_scheduler_running == OS_TRUE){
+                    _OS_schedule_yield_other_core(i, tcb->priority); 
+                }
+                else {
+                    OS_yield_pending_list[i] = OS_TRUE;
+                }
+                break;
+            }
+        }
+    }
     return OS_NO_ERROR;
 }
 
 /*******************************************************************************
 * OS Schedule Suspend Task
 *
-*   tcb = A pointer to the tcb to be suspended
+*   tcb = A pointer to the tcb to be suspended. Use NULL to suspend the 
+*         currently running TCB
 * 
 * PURPOSE : 
+*
+*   Suspend a task for an unspecified amount of time. Used by blocking APIs
 *
 * RETURN : 
 *
@@ -707,10 +737,11 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 *
 *******************************************************************************/
 
-/* TODO: consider merging this with delay task and use max delay to suspend */
+/* TODO: This is its own API for now but one day I may merge with OS_schedule_delay_task */
 int OS_schedule_suspend_task(TCB_t *tcb)
 {
-    assert(3 == 9);
+    int i;
+
     /* Scheduler must be running in order to delay a task */
     if(OS_scheduler_running == OS_FALSE) {
         return OS_ERROR_SCHEDULER_STOPPED;
@@ -740,10 +771,11 @@ int OS_schedule_suspend_task(TCB_t *tcb)
         case OS_TASK_STATE_READY_TO_DELETE:
             return OS_ERROR_DELETED_TASK;
         default:
-            configASSERT(OS_FALSE);
+            return OS_ERROR_INVALID_TSK_STATE;
     }
     tcb->task_state = OS_TASK_STATE_SUSPENDED;
 
+    /* This line is only necessary if still reliant on FreeRTOS API */
     if( listLIST_ITEM_CONTAINER( &( tcb->xEventListItem ) ) != NULL )
 	{
 		( void ) uxListRemove( &( tcb->xEventListItem ) );
@@ -752,18 +784,29 @@ int OS_schedule_suspend_task(TCB_t *tcb)
     _OS_suspended_list_insert(tcb);
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
+    /* Yield if we suspended the TCB on this core */
     if(tcb == OS_current_TCB[xPortGetCoreID()]) {
         if(OS_scheduler_running == OS_TRUE){
             portYIELD_WITHIN_API();
         }
         else {
-            /* TODO */
-            assert(OS_FALSE);
+            OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
         }
     }
+
+    /* Yield if we suspended the TCB on another core */
     else {
-        /* TODO */
-        assert(OS_FALSE);
+        for(i = 0; i < portNUM_PROCESSORS; ++i){
+            if(tcb == OS_current_TCB[i]) {
+                if(OS_scheduler_running == OS_TRUE){
+                    _OS_schedule_yield_other_core(i, tcb->priority); 
+                }
+                else {
+                    OS_yield_pending_list[i] = OS_TRUE;
+                }
+                break;
+            }
+        }
     }
     return OS_NO_ERROR;
 }
@@ -847,9 +890,14 @@ int OS_schedule_resume_task(TCB_t *tcb)
 *
 *   Notifies the kernel a tick has occured. Updates delay counters and more.
 * 
-* RETURN : 
+* RETURN :
+*
+*   Returns a boolean stating whether or not a context switch is required.
 *
 * NOTES: 
+*
+*   Portable/hardware layer is expected to call OS_schedule_switch_context
+*   if this function returns true.
 *******************************************************************************/
 
 OSBool_t OS_schedule_process_tick(void)
@@ -866,8 +914,7 @@ OSBool_t OS_schedule_process_tick(void)
         vApplicationTickHook();
 
         /* Only core 0 can increment the tick count */
-        /* TODO: Try saying != 0 and make it return context switch required */
-        if (xPortGetCoreID() == 1 ) {
+        if (xPortGetCoreID() != 0 ) {
 			return OS_TRUE;
 		}
     }
@@ -882,9 +929,8 @@ OSBool_t OS_schedule_process_tick(void)
 
     OS_tick_counter++;
     if(OS_tick_counter == (TickType_t)0){
-        configASSERT(0 == 1); /* TODO */
+        assert(OS_FALSE); /* TODO */
         ++OS_tick_overflow_counter;
-        /*_OS_delayed_tasks_cycle_overflow(); */
     }
 
     /* Wakeup any tasks whose timers have expired */
@@ -1152,6 +1198,142 @@ void OS_schedule_set_task_TLS_ptr(TCB_t *tcb, int index,
         portEXIT_CRITICAL(&OS_schedule_mutex);
     }
 
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+TCB_t* OS_schedule_get_idle_tcb(int core_ID)
+{
+    TCB_t *idle = OS_idle_tcb_list[core_ID];
+    return idle;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+TCB_t* OS_schedule_get_current_tcb(void)
+{
+    TCB_t *current_tcb;
+
+    unsigned state = portENTER_CRITICAL_NESTED();
+    current_tcb = OS_current_TCB[xPortGetCoreID()];
+    portEXIT_CRITICAL_NESTED(state);
+
+    return current_tcb;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+/* TODO Eventually merge this with the other? */
+TCB_t* OS_schedule_get_current_tcb_from_core(int core_ID)
+{
+    TCB_t *current_tcb = NULL;
+
+    unsigned state = portENTER_CRITICAL_NESTED();
+    current_tcb = OS_current_TCB[core_ID];
+    portEXIT_CRITICAL_NESTED(state);
+
+    return current_tcb;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+OSScheduleState_t OS_schedule_get_state(void)
+{
+    unsigned state;
+    OSScheduleState_t current_state;
+    
+    state = portENTER_CRITICAL_NESTED();
+    if (OS_scheduler_running == OS_FALSE) {
+        current_state = OS_SCHEDULE_STATE_STOPPED;
+    }
+    else if (OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE) {
+        current_state = OS_SCHEDULE_STATE_SUSPENDED;
+    }
+    else {
+        current_state = OS_SCHEDULE_STATE_RUNNING;
+    }
+    portEXIT_CRITICAL_NESTED(state);
+    return current_state;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+TickType_t OS_schedule_get_tick_count(){
+    return OS_tick_counter;
+}
+
+/*******************************************************************************
+* OS Task Delete
+*
+*   tcb: 
+* 
+* PURPOSE : 
+* 
+* RETURN : 
+*
+* NOTES: this function isn't failing
+*******************************************************************************/
+
+struct _reent* __getreent(void) {
+	//No lock needed because if this changes, we won't be running anymore.
+	TCB_t *currTask=OS_schedule_get_current_tcb();
+	if (currTask==NULL) {
+		//No task running. Return global struct.
+		return _GLOBAL_REENT;
+	} else {
+		//We have a task; return its reentrant struct.
+		return &currTask->xNewLib_reent;
+	}
 }
 
 /*******************************************************************************
@@ -1965,66 +2147,3 @@ static void _OS_pending_ready_list_insert(TCB_t *tcb, int core_ID)
     OS_pending_ready_list[core_ID].num_tasks++;
 }
 
-TCB_t* OS_schedule_get_idle_tcb(int core_ID)
-{
-    TCB_t *idle = OS_idle_tcb_list[core_ID];
-    return idle;
-}
-
-TCB_t* OS_schedule_get_current_tcb(void)
-{
-    TCB_t *current_tcb;
-
-    unsigned state = portENTER_CRITICAL_NESTED();
-    current_tcb = OS_current_TCB[xPortGetCoreID()];
-    portEXIT_CRITICAL_NESTED(state);
-
-    return current_tcb;
-}
-
-/* TODO Eventually merge this with the other? */
-TCB_t* OS_schedule_get_current_tcb_from_core(int core_ID)
-{
-    TCB_t *current_tcb = NULL;
-
-    unsigned state = portENTER_CRITICAL_NESTED();
-    current_tcb = OS_current_TCB[core_ID];
-    portEXIT_CRITICAL_NESTED(state);
-
-    return current_tcb;
-}
-
-OSScheduleState_t OS_schedule_get_state(void)
-{
-    unsigned state;
-    OSScheduleState_t current_state;
-    
-    state = portENTER_CRITICAL_NESTED();
-    if (OS_scheduler_running == OS_FALSE) {
-        current_state = OS_SCHEDULE_STATE_STOPPED;
-    }
-    else if (OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE) {
-        current_state = OS_SCHEDULE_STATE_SUSPENDED;
-    }
-    else {
-        current_state = OS_SCHEDULE_STATE_RUNNING;
-    }
-    portEXIT_CRITICAL_NESTED(state);
-    return current_state;
-}
-
-TickType_t OS_schedule_get_tick_count(){
-    return OS_tick_counter;
-}
-
-struct _reent* __getreent(void) {
-	//No lock needed because if this changes, we won't be running anymore.
-	TCB_t *currTask=OS_schedule_get_current_tcb();
-	if (currTask==NULL) {
-		//No task running. Return global struct.
-		return _GLOBAL_REENT;
-	} else {
-		//We have a task; return its reentrant struct.
-		return &currTask->xNewLib_reent;
-	}
-}
