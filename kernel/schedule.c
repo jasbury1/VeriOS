@@ -570,6 +570,7 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DOUBLE_DELETE;
         default:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_INVALID_TSK_STATE;
     }
         
@@ -680,6 +681,7 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
         default:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_INVALID_TSK_STATE;
     }
 
@@ -771,6 +773,7 @@ int OS_schedule_suspend_task(TCB_t *tcb)
         case OS_TASK_STATE_READY_TO_DELETE:
             return OS_ERROR_DELETED_TASK;
         default:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_INVALID_TSK_STATE;
     }
     tcb->task_state = OS_TASK_STATE_SUSPENDED;
@@ -814,9 +817,12 @@ int OS_schedule_suspend_task(TCB_t *tcb)
 /*******************************************************************************
 * OS Schedule Resume Task
 *
-*   tcb = A pointer to the tcb to be suspended
+*   tcb = A pointer to the tcb that has been suspended or delayed
 * 
-* PURPOSE : 
+* PURPOSE :
+*
+*   Resume a task that has either been suspended or delayed. Add it back into
+*   scheduling rotation 
 *
 * RETURN : 
 *
@@ -828,7 +834,6 @@ int OS_schedule_suspend_task(TCB_t *tcb)
 
 int OS_schedule_resume_task(TCB_t *tcb)
 {
-    assert(3 == 9);
     int i;
 
     if(OS_scheduler_running == OS_FALSE) {
@@ -837,6 +842,7 @@ int OS_schedule_resume_task(TCB_t *tcb)
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
+    /* The task must be on a suspended or delayed list. Remove it */
     switch(tcb->task_state) {
         case OS_TASK_STATE_RUNNING:
             portEXIT_CRITICAL(&OS_schedule_mutex);
@@ -859,7 +865,8 @@ int OS_schedule_resume_task(TCB_t *tcb)
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
         default:
-            configASSERT(OS_FALSE);
+            portEXIT_CRITICAL(&OS_schedule_mutex);
+            return OS_ERROR_INVALID_TSK_STATE;
     }
 
     /* Make the resumed task ready */
@@ -1003,7 +1010,7 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         return OS_NO_ERROR;
     }
 
-    /* Task must be removed from any list prior to a priority change */
+    /* Remove the task if it's on a ready list prior to a priority change */
     switch(tcb->task_state) {
         case OS_TASK_STATE_RUNNING:
             _OS_ready_list_remove(tcb);
@@ -1018,19 +1025,18 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         case OS_TASK_STATE_PENDING_DELETION:
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
-            break;
         case OS_TASK_STATE_READY_TO_DELETE:
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
-            break;
         default:
+            portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_INVALID_TSK_STATE;
     }
     
+    /* Update both the priority and the base priotity */
     if(tcb->base_priority == tcb->priority){
         tcb->priority = new_prio;
     }
-    /* TODO: THIS IS A NEW LINE! Double check it */
     tcb->base_priority = new_prio;
 
     /* We can re-add to the ready list now that the priority is changed */
@@ -1059,6 +1065,7 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
         context_switch_required = OS_TRUE;
     }
 
+    /* Force a reschedule if necessary now that the priority is different */
     if(context_switch_required == OS_TRUE){
         if(tcb->core_ID != xPortGetCoreID()){
             _OS_schedule_yield_other_core(tcb->core_ID, new_prio);
@@ -1084,7 +1091,7 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
 * NOTES: 
 *******************************************************************************/
 
-void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
+void OS_schedule_PI_task_inherit(TCB_t *mutex_holder)
 {
     /* TODO: remove this later: */
     //configASSERT(mutex_holder->task_state != OS_TASK_STATE_RUNNING);

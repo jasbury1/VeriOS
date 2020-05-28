@@ -269,6 +269,40 @@ void *OS_task_get_TLS_ptr(TCB_t *tcb, int index)
 }
 
 /*******************************************************************************
+* OS Schedule Set Task TLS Ptr
+*
+*   tcb = The pointer to the task whose pointer value is getting updated
+*   index = The index into the TLS table to use 
+*   value = The pointer that gets placed inside the TLS table
+*   callback = The function used to delete the TLS pointer upon task deletion
+* 
+* PURPOSE :
+*
+*   Sets the value of a thread local storage pointer. Must include a delete
+*   callback so that the OS knows how to free the data upon task deletion
+* 
+* RETURN : 
+*
+* NOTES:
+*******************************************************************************/
+
+/* TODO: make the indexing smarter one day... */
+void OS_task_set_TLS_ptr(TCB_t *tcb, int index, 
+        void *value, TLSPtrDeleteCallback_t callback)
+{
+    if(tcb == NULL) {
+        tcb = OS_schedule_get_current_tcb();
+    }
+
+    if(index < configNUM_THREAD_LOCAL_STORAGE_POINTERS) {
+        portENTER_CRITICAL(&(tcb->task_state_mux));
+        tcb->TLS_table[index] = value;
+        tcb->TLS_delete_callback_table[index] = callback;
+        portEXIT_CRITICAL(&(tcb->task_state_mux));
+    }
+}
+
+/*******************************************************************************
 * OS Task Get Priority
 *
 *   tcb: A pointer to the desired TCB 
@@ -404,6 +438,9 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
         tcb->TLS_table[i] = NULL;
         tcb->TLS_delete_callback_table[i] = NULL;
     }
+
+    /* Initialize the tasks internal state mtex */
+    vPortCPUInitializeMutex(&tcb->task_state_mux);
 
     esp_reent_init(&tcb->xNewLib_reent);
 

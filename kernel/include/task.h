@@ -39,6 +39,7 @@ typedef void * TaskHandle_t;
 
 typedef enum {
     OS_TASK_STATE_RUNNING,
+    OS_TASK_STATE_PENDING_READY,
     OS_TASK_STATE_READY,
     OS_TASK_STATE_DELAYED,
     OS_TASK_STATE_SUSPENDED,
@@ -117,6 +118,8 @@ struct OSTaskControlBlock
         Semaphore/timer/queue systems */
     ListItem_t	xEventListItem;
 
+    /* A mutex for changing the state of this task */
+    portMUX_TYPE task_state_mux;
 };
 
 /*******************************************************************************
@@ -135,5 +138,7 @@ int OS_task_get_core_ID(TCB_t *tcb);
 TaskPrio_t OS_task_get_priority(TCB_t *tcb);
 
 void *OS_task_get_TLS_ptr(TCB_t *tcb, int index);
+
+void OS_task_set_TLS_ptr(TCB_t *tcb, int index, void *value, TLSPtrDeleteCallback_t callback);
 
 #endif /* OS_TASK_H */

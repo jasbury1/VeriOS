@@ -143,7 +143,7 @@ void *pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery, BaseType_t 
 }
 
 void vTaskSetThreadLocalStoragePointerAndDelCallback( TaskHandle_t xTaskToSet, BaseType_t xIndex, void *pvValue, TlsDeleteCallbackFunction_t pvDelCallback){
-	OS_schedule_set_task_TLS_ptr((TCB_t *)xTaskToSet, xIndex, pvValue, pvDelCallback);
+	OS_task_set_TLS_ptr((TCB_t *)xTaskToSet, xIndex, pvValue, pvDelCallback);
 }
 
 BaseType_t xTaskCallApplicationTaskHook( TaskHandle_t xTask, void *pvParameter ) {
