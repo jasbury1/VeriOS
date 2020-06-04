@@ -93,11 +93,4 @@ typedef struct OSTaskListHeader WaitList_t;
 * FUNCTION HEADERS
 *******************************************************************************/
 
-
-void OS_waitlist_insert_task(TCB_t *tcb, WaitList_t *waitlist);
-
-void OS_waitlist_remove_task(TCB_t *tcb);
-
-TCB_t * OS_waitlist_pop_head(WaitList_t *waitlist);
-
 #endif /* VERIOS_H */

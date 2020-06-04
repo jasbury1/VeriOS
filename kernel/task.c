@@ -188,8 +188,7 @@ int OS_task_delete(TCB_t *tcb)
 
 char * OS_task_get_name(TCB_t *tcb)
 {
-    assert(3 == 9);
-    configASSERT(tcb);
+    assert(tcb);
     return &(tcb->task_name[0]);
 }
 
@@ -211,8 +210,7 @@ char * OS_task_get_name(TCB_t *tcb)
 
 int OS_task_get_core_ID(TCB_t *tcb)
 {
-    assert(3 == 9);
-    configASSERT(tcb);
+    assert(tcb);
     return tcb->core_ID;
 }
 
@@ -320,7 +318,6 @@ void OS_task_set_TLS_ptr(TCB_t *tcb, int index,
 
 int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data)
 {
-    assert(3 == 9);
     int ret_val;
     if(tcb->msg_queue.max_messages <= 0) {
         return OS_ERROR_NO_TASK_QUEUE;
@@ -348,7 +345,6 @@ int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data)
 
 void * OS_task_receive_msg(TickType_t timeout)
 {
-    assert(3 == 9);
     TCB_t *cur_tcb;
     void * msg;
 

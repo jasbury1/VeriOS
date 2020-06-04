@@ -81,9 +81,13 @@ struct OSTaskControlBlock
     int core_ID;
 
     TaskPrio_t priority;
+
+    /* Stack data */
     StackType_t *stack_start;
     StackType_t *stack_end;
     int stack_size;
+
+    /* Task Name */
     char task_name[OS_MAX_TASK_NAME];
 
     /* IPC data */

@@ -16,6 +16,7 @@ task.h is included from an application file. */
 #include "task.h"
 #include "schedule.h"
 #include "msg_queue.h"
+#include "verios_util.h"
 #include "StackMacros.h"
 #include "portmacro.h"
 #include "portmacro_priv.h"
@@ -176,8 +177,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
     OSBool_t timeout_set = OS_FALSE;
 
     assert(msg_queue);
-
-    configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+    assert(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
 
     while (OS_TRUE) {
         portENTER_CRITICAL(&(msg_queue->mux));
@@ -203,7 +203,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 
             /* If tasks are waiting on this message queue, wake them up */
             if(msg_queue->reveive_waiters.num_tasks != 0){
-                waiting_receiver = OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
+                waiting_receiver = _OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
             }
 
             portEXIT_CRITICAL(&(msg_queue->mux));
@@ -224,7 +224,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
         }
 
         /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
-        OS_waitlist_insert_task(sender, &(msg_queue->send_waiters));
+        _OS_waitlist_append(sender, &(msg_queue->send_waiters));
         
         portEXIT_CRITICAL(&(msg_queue->mux));
 
@@ -248,7 +248,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 }
 
 /*******************************************************************************
-* OS Message Queue Init
+* OS Message Queue Pend
 *
 *   msg_queue = The message queue to read from
 *   timeout = The amount of time to wait for a message if the queue is empty
@@ -295,7 +295,7 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 
             /* If tasks are waiting on this message queue, wake them up */
             if(msg_queue->send_waiters.num_tasks != 0){
-                waiting_sender = OS_waitlist_pop_head(&(msg_queue->send_waiters));
+                waiting_sender = _OS_waitlist_pop_head(&(msg_queue->send_waiters));
             }
 
             portEXIT_CRITICAL(&(msg_queue->mux));
@@ -316,7 +316,7 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
         }
 
         /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
-        OS_waitlist_insert_task(receiver, &(msg_queue->reveive_waiters));
+        _OS_waitlist_append(receiver, &(msg_queue->reveive_waiters));
         
         portEXIT_CRITICAL(&(msg_queue->mux));
 
@@ -338,18 +338,24 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 }
 
 /*******************************************************************************
-* OS Message Queue Init
+* OS Message Queue Try Send
 *
-*   msg_queue = 
-*   queue_size = 
+*   msg_queue = A pointer to the message queue to send the message to
+*   data = A pointer to the data the message is carrying. Usually allocated 
 * 
 * PURPOSE : 
 *   
 * 
 * RETURN :
-*   
 *
-* NOTES: 
+*   Returns an OS_NO_ERROR if the message was sent successfully. Returns -1 if
+*   The queue was full and the send did not complete. Returns an error code
+*   if an error occured.
+*
+* NOTES:
+*
+*   This function is non-blocking and will not wait to send a message if the
+*   queue is full. Use OS_msg_queue_post for the blocking equivalent
 *******************************************************************************/
 
 int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
@@ -357,67 +363,104 @@ int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
     TCB_t *waiting_receiver = NULL;
-    OSBool_t timeout_set = OS_FALSE;
 
-    configASSERT(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+    assert(msg_queue);
+    assert(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
 
-    while (OS_TRUE) {
-        portENTER_CRITICAL(&(msg_queue->mux));
+    portENTER_CRITICAL(&(msg_queue->mux));
+    
+    /* Add the message if there is room on the queue */
+    if (msg_queue->num_messages < msg_queue->max_messages)
+    {
         
-        /* Add the message if there is room on the queue */
-        if (msg_queue->num_messages < msg_queue->max_messages)
+        portENTER_CRITICAL(&OS_message_mutex);
+        new_message = _OS_msg_pool_retrieve();
+        portEXIT_CRITICAL(&OS_message_mutex);
+        
+        if (new_message == NULL)
         {
-            portENTER_CRITICAL(&OS_message_mutex);
-            new_message = _OS_msg_pool_retrieve();
-            portEXIT_CRITICAL(&OS_message_mutex);
-
-            if (new_message == NULL)
-            {
-                return OS_ERROR_MSG_POOL_RETR;
-            }
-
-            new_message->sender = sender;
-            new_message->contents = data;
-            new_message->next_ptr = NULL;
-
-            _OS_msg_queue_insert(msg_queue, new_message);
-
-            /* If tasks are waiting on this message queue, wake them up */
-            if(msg_queue->reveive_waiters.num_tasks != 0){
-                waiting_receiver = OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
-            }
-
-            portEXIT_CRITICAL(&(msg_queue->mux));
-
-            if(waiting_receiver != NULL){
-                /* Schedule the task that was waiting on a new message */
-                OS_schedule_resume_task(waiting_receiver);
-            }
-
-            return OS_NO_ERROR;
+            return OS_ERROR_MSG_POOL_RETR;
         }
+
+        new_message->sender = sender;
+        new_message->contents = data;
+        new_message->next_ptr = NULL;
+
+        _OS_msg_queue_insert(msg_queue, new_message);
+
+        /* If tasks are waiting on this message queue, wake them up */
+        if(msg_queue->reveive_waiters.num_tasks != 0){
+            waiting_receiver = _OS_waitlist_pop_head(&(msg_queue->reveive_waiters));
+        }
+
+        portEXIT_CRITICAL(&(msg_queue->mux));
+
+        if(waiting_receiver != NULL){
+            /* Schedule the task that was waiting on a new message */
+            OS_schedule_resume_task(waiting_receiver);
+        }
+
+        return OS_NO_ERROR;
     }
-    return OS_NO_ERROR;
+
+    portEXIT_CRITICAL(&(msg_queue->mux));
+    return -1;
 }
 
 /*******************************************************************************
-* OS Message Queue Init
+* OS Message Queue Try Reveive
 *
-*   msg_queue = 
-*   queue_size = 
+*   msg_queue = The message queue to read from
 * 
 * PURPOSE : 
 *   
 * 
 * RETURN :
-*   
 *
-* NOTES: 
+*   Returns a void pointer to the data read from the message. Returns a NULL ptr
+*   if the queue was empty
+*
+* NOTES:
+*
+*   This function is non-blocking and will not wait to read a message if the
+*   queue is empty. Use OS_msg_queue_pend for the blocking equivalent
 *******************************************************************************/
 
-int OS_msg_queue_try_receive()
+void * OS_msg_queue_try_receive(MessageQueue_t *msg_queue)
 {
-    return -1;
+    Message_t *retrieved_message = NULL;
+    TCB_t *waiting_sender = NULL;
+
+    void *msg_contents;
+
+    portENTER_CRITICAL(&(msg_queue->mux));
+
+    /* There is a message on the queue that we can retrieve */
+    if(msg_queue->num_messages > 0) {
+        retrieved_message = _OS_msg_queue_pop(msg_queue);
+        msg_contents = retrieved_message->contents;
+
+        /* We are done with this message. Add to the pool for future re-use */
+        portENTER_CRITICAL(&OS_message_mutex);
+        _OS_msg_pool_insert(retrieved_message);
+        portEXIT_CRITICAL(&OS_message_mutex);
+
+        /* If tasks are waiting on this message queue, wake them up */
+        if(msg_queue->send_waiters.num_tasks != 0){
+            waiting_sender = _OS_waitlist_pop_head(&(msg_queue->send_waiters));
+        }
+
+        portEXIT_CRITICAL(&(msg_queue->mux));
+
+        if(waiting_sender != NULL){
+            /* Schedule the task that was waiting on a new message */
+            OS_schedule_resume_task(waiting_sender);
+        }
+
+        return msg_contents;
+    }
+    portEXIT_CRITICAL(&(msg_queue->mux));
+    return NULL;    
 }
 
 /*******************************************************************************
