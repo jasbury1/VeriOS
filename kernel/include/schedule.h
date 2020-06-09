@@ -15,6 +15,9 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
+/* CPU data information */
+typedef struct OSCPU SchedCPU_t;
+
 typedef struct OSTaskListHeader ReadyList_t;
 typedef struct OSTaskListHeader DeletionList_t;
 typedef struct OSTaskListHeader DelayedList_t;
@@ -36,6 +39,8 @@ typedef struct xTIME_OUT
 /*******************************************************************************
 * FUNCTION HEADERS
 *******************************************************************************/
+
+void OS_schedule_init(void);
 
 int OS_schedule_start(void);
 

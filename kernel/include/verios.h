@@ -86,6 +86,17 @@ struct OSTaskListHeader {
     TCB_t *tail_ptr;
 };
 
+struct OSCPU {
+    /* Boolean values recording critical state changes */
+    OSBool_t scheduler_suspended;
+    OSBool_t yield_pending;
+    OSBool_t switching_context;
+
+    /* CPU dependant TCB references */
+    volatile TCB_t *running_tcb;
+    TCB_t *idle_tcb;
+};
+
 
 typedef struct OSTaskListHeader WaitList_t;
 

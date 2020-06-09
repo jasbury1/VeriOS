@@ -37,16 +37,17 @@ linkage and placement. */
 * SCHEDULER CRITICAL STATE VARIABLES
 *******************************************************************************/
 
+/* State variables maintained by the entire scheduler. Not CPU dependant */
 PRIVILEGED_DATA static volatile OSBool_t OS_scheduler_running = OS_FALSE;
 PRIVILEGED_DATA static volatile TickType_t OS_tick_counter = (TickType_t)0;
 PRIVILEGED_DATA static volatile TickType_t OS_tick_overflow_counter = (TickType_t)0;
 PRIVILEGED_DATA static volatile TickType_t OS_pending_ticks = (TickType_t)0;
 
+/* CPU Scheduling data per core */
+PRIVILEGED_DATA static volatile SchedCPU_t OS_schedule_CPU[portNUM_PROCESSORS];
+
 /* Keeps track of the TCBs that are currently running on the processor */
 PRIVILEGED_DATA TCB_t * volatile OS_current_TCB[portNUM_PROCESSORS] = { NULL };
-
-/* The IDLE TCBs for each processor */
-PRIVILEGED_DATA static TCB_t * OS_idle_tcb_list[portNUM_PROCESSORS] = { NULL };
 
 /* A counter for the number of tasks currently ready (not deleted) */
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks = 0;
@@ -59,15 +60,6 @@ PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
 
 /* A counter for the time to unblock the next task that is blocked */
 PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = portMAX_DELAY;
-
-/* Keep track of if schedulers are suspended (OS_TRUE) or not (OS_FALSE) */
-PRIVILEGED_DATA static volatile OSBool_t OS_suspended_schedulers_list[portNUM_PROCESSORS] = {OS_FALSE};
-
-/* Keep track of if yields are pending (OS_TRUE) or not (OS_FALSE) on a given processor */
-PRIVILEGED_DATA static volatile OSBool_t OS_yield_pending_list[portNUM_PROCESSORS] = {OS_FALSE};
-
-/* Keep track of if a core is switching contexts (OS_TRUE) or not (OS_FALSE) */
-PRIVILEGED_DATA static volatile OSBool_t OS_switching_context_list[portNUM_PROCESSORS]  = {OS_FALSE};
 
 /* One mutex for use in scheduler actions */
 PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED;
@@ -94,7 +86,6 @@ static volatile ReadyList_t OS_ready_list[OS_MAX_PRIORITIES] = {{0, NULL, NULL}}
 /**
  * The list of tasks that were scheduled while the scheduler was suspended
  */
-
 static volatile ReadyList_t OS_pending_ready_list[portNUM_PROCESSORS] = {{0, NULL, NULL}};
 
 /**
@@ -158,6 +149,32 @@ static void _OS_update_next_task_unblock_time(void);
 
 static void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio );
 
+/**
+ * TODO: A future project will be to store the current tcb entirely in
+ * the cpu struct. Portable assembly then has to be rewritten to find the
+ * TCB here. This will take a long time and is temporarily out of the scope
+ * of VeriOS' current state
+ */
+static inline TCB_t * _OS_get_current_TCB(){
+    //return OS_schedule_CPU[xPortGetCoreID()].running_tcb;
+    return OS_current_TCB[xPortGetCoreID()];
+}
+
+static inline TCB_t * _OS_get_current_tcb_from_core(int core_ID){
+    //return OS_schedule_CPU[core_ID].running_tcb;
+    return OS_current_TCB[core_ID];
+}
+
+static inline void _OS_set_current_tcb(TCB_t *tcb){
+    //OS_schedule_CPU[xPortGetCoreID()].running_tcb = tcb;
+    OS_current_TCB[xPortGetCoreID()] = tcb;
+}
+
+static inline void _OS_set_current_tcb_for_core(int core_ID, TCB_t *tcb){
+    //OS_schedule_CPU[core_ID].running_tcb = tcb;
+    OS_current_TCB[core_ID] = tcb;
+}
+
 /*******************************************************************************
 * IDLE TASK
 *******************************************************************************/
@@ -170,6 +187,35 @@ void OS_IDLE_TASK(void * idle_task_param)
         }
         extern void vApplicationIdleHook(void);
         vApplicationIdleHook();
+    }
+}
+
+/*******************************************************************************
+* OS Schedule Init
+* 
+* PURPOSE :
+*
+*   Do any setup work that needs to happen before the scheduler is started
+*   and before the schedule is used (Ex. creating tasks)
+* 
+* RETURN : 
+*
+* NOTES:
+*
+*******************************************************************************/
+
+void OS_schedule_init(void)
+{
+    int i;
+    SchedCPU_t cpu;
+
+    for(i = 0; i < portNUM_PROCESSORS; ++i) {
+        cpu = OS_schedule_CPU[i];
+        cpu.idle_tcb = NULL;
+        cpu.running_tcb = NULL;
+        cpu.scheduler_suspended = OS_FALSE;
+        cpu.switching_context = OS_FALSE;
+        cpu.yield_pending = OS_FALSE;
     }
 }
 
@@ -196,10 +242,12 @@ int OS_schedule_start(void)
     int ret_val;
 
     for(i = 0; i < portNUM_PROCESSORS; ++i) {
-        ret_val = OS_task_create(OS_IDLE_TASK, NULL, OS_IDLE_NAME, 0, OS_IDLE_STACK_SIZE, 
-                                    0, i, (void **)(&OS_idle_tcb_list[i]));
-        if(ret_val != OS_NO_ERROR){
-            return ret_val;
+        if(OS_schedule_CPU[i].idle_tcb == NULL){
+            ret_val = OS_task_create(OS_IDLE_TASK, NULL, OS_IDLE_NAME, 0, 
+                    OS_IDLE_STACK_SIZE, 0, i, (void **)(&(OS_schedule_CPU[i].idle_tcb)));
+            if(ret_val != OS_NO_ERROR){
+                return ret_val;
+            }
         }
     }
     /* TODO: we use FreeRTOS timer APIs. change to our own API in the future */
@@ -266,7 +314,7 @@ void OS_schedule_suspend(void)
     unsigned state;
     state = portENTER_CRITICAL_NESTED();
     /* Increment rather than just set to OS_TRUE since suspend calls can be nested */
-    OS_suspended_schedulers_list[xPortGetCoreID()]++;
+    OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended++;
     portEXIT_CRITICAL_NESTED(state);
 }
 
@@ -290,14 +338,14 @@ void OS_schedule_suspend(void)
 OSBool_t OS_schedule_resume(void)
 {
     OSBool_t yield_occured = OS_FALSE;
-    assert(OS_suspended_schedulers_list[xPortGetCoreID()] >= OS_TRUE);
+    assert(OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended >= OS_TRUE);
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
-    OS_suspended_schedulers_list[xPortGetCoreID()]--;
+    OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended--;
     
     /* Nothing to do if we are still in nested suspension or have no tasks */
-    if(OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE ||
+    if(OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended != OS_FALSE ||
        OS_num_tasks == 0) {
         portEXIT_CRITICAL(&OS_schedule_mutex); 
         return yield_occured;
@@ -311,13 +359,13 @@ OSBool_t OS_schedule_resume(void)
     /* Get up to date with all the ticks that have passed */
 	while( OS_pending_ticks > 0) {
 		if( OS_schedule_process_tick() == OS_TRUE) {
-			OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+            OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
 		}
 		--OS_pending_ticks;
 	}
 
     /* Yield if we missed a necessary yield while suspended */
-    if( OS_yield_pending_list[xPortGetCoreID()] == OS_TRUE ) {
+    if( OS_schedule_CPU[xPortGetCoreID()].yield_pending == OS_TRUE ) {
 		yield_occured = OS_TRUE;
         portYIELD_WITHIN_API();
 	}
@@ -357,20 +405,20 @@ void OS_schedule_switch_context(void)
     core_ID = xPortGetCoreID();
 
     /* Do not switch context if we are suspended! */
-    if(OS_suspended_schedulers_list[core_ID] != OS_FALSE){
-        OS_yield_pending_list[core_ID] = OS_TRUE;
+    if(OS_schedule_CPU[core_ID].scheduler_suspended != OS_FALSE){
+        OS_schedule_CPU[core_ID].yield_pending = OS_TRUE;
         portEXIT_CRITICAL_NESTED(state);
         return;
     }
 
-    OS_yield_pending_list[core_ID] = OS_FALSE;
-    OS_switching_context_list[core_ID] = OS_TRUE;
+    OS_schedule_CPU[core_ID].yield_pending = OS_FALSE;
+    OS_schedule_CPU[core_ID].switching_context = OS_TRUE;
 
     /* TODO: check for stack overflow one day */
 
     vPortCPUAcquireMutex(&OS_schedule_mutex);
 
-    tcb_swapped_out = OS_current_TCB[core_ID];
+    tcb_swapped_out = _OS_get_current_tcb_from_core(core_ID);
     if(tcb_swapped_out->task_state == OS_TASK_STATE_RUNNING){
         tcb_swapped_out->task_state = OS_TASK_STATE_READY;
     }
@@ -407,13 +455,13 @@ void OS_schedule_switch_context(void)
 
     /* See if we need to run IDLE */
     if(tcb_to_run == NULL){
-        tcb_to_run = OS_idle_tcb_list[core_ID];
+        tcb_to_run = OS_schedule_CPU[core_ID].idle_tcb;
     }
 
     tcb_to_run->task_state = OS_TASK_STATE_RUNNING;
-    OS_current_TCB[core_ID] = tcb_to_run;
+    _OS_set_current_tcb_for_core(core_ID, tcb_to_run);
 
-    OS_switching_context_list[core_ID] = OS_FALSE;
+    OS_schedule_CPU[core_ID].switching_context = OS_FALSE;
     vPortCPUReleaseMutex(&OS_schedule_mutex);
     portEXIT_CRITICAL_NESTED(state);
     return;
@@ -461,8 +509,8 @@ int OS_schedule_add_task(TCB_t *new_tcb)
 
         /* If there is a core that can run it now, place it there */
         for(i = 0; i < portNUM_PROCESSORS; ++i) {
-            if(OS_current_TCB[i] == NULL || 
-                    OS_current_TCB[i]-> priority < new_tcb->priority) {
+            if(_OS_get_current_tcb_from_core(i) == NULL || 
+                    _OS_get_current_tcb_from_core(i)-> priority < new_tcb->priority) {
                 core_ID = i;
                 break;
             }
@@ -474,17 +522,17 @@ int OS_schedule_add_task(TCB_t *new_tcb)
     }
 
     /* If nothing is running on this core then put our task there */
-    if(OS_current_TCB[core_ID] == NULL ) {
-        OS_current_TCB[core_ID] = new_tcb;
+    if(_OS_get_current_tcb_from_core(core_ID) == NULL ) {
+        _OS_set_current_tcb_for_core(core_ID, new_tcb);
         new_tcb->task_state = OS_TASK_STATE_RUNNING;
     }
 
     /* Make this task the current if its priority is the highest 
     priority and the scheduler isn't running */
     else if(OS_scheduler_running == OS_FALSE){
-        if(OS_current_TCB[core_ID]->priority <= new_tcb->priority) {
-            OS_current_TCB[core_ID]->task_state = OS_TASK_STATE_READY;
-            OS_current_TCB[core_ID] = new_tcb;
+        if(_OS_get_current_tcb_from_core(core_ID)->priority <= new_tcb->priority) {
+            _OS_get_current_tcb_from_core(core_ID)->task_state = OS_TASK_STATE_READY;
+            _OS_set_current_tcb_for_core(core_ID, new_tcb);
             new_tcb->task_state = OS_TASK_STATE_RUNNING;
         }
     }
@@ -500,7 +548,7 @@ int OS_schedule_add_task(TCB_t *new_tcb)
     }
 
 	/* Scheduler is running. Check to see if we should run the task now */
-	if(OS_current_TCB[core_ID]->priority < new_tcb->priority) {
+	if(_OS_get_current_tcb_from_core(core_ID)->priority < new_tcb->priority) {
 		if( core_ID == xPortGetCoreID() )
 		{
 			portYIELD_WITHIN_API();
@@ -603,13 +651,13 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
     /* Force a reschedule if the conditions require it */
     if(OS_scheduler_running == OS_TRUE){
         /* If the task is running on this core */
-        if(old_tcb == OS_current_TCB[xPortGetCoreID()]){
+        if(old_tcb == _OS_get_current_TCB()){
             portYIELD_WITHIN_API();
         }
         else {
             /* Yield if the task was running on any other core */
             for(i = 0; i < portNUM_PROCESSORS; ++i){
-               if(OS_current_TCB[i] == old_tcb){
+               if(_OS_get_current_tcb_from_core(i) == old_tcb){
                    vPortYieldOtherCore(i);
                }
             }
@@ -657,7 +705,7 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
     wakeup_time = tick_delay + OS_tick_counter;
     
     if(tcb == NULL){
-        tcb = OS_current_TCB[xPortGetCoreID()];
+        tcb = _OS_get_current_TCB();
     }
 
     /* Remove ourselves from existing task list */
@@ -695,24 +743,24 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
     portEXIT_CRITICAL(&OS_schedule_mutex);
     
     /* Yield if we suspended the TCB on this core */
-    if(tcb == OS_current_TCB[xPortGetCoreID()]) {
+    if(tcb == _OS_get_current_TCB()) {
         if(OS_scheduler_running == OS_TRUE){
             portYIELD_WITHIN_API();
         }
         else {
-            OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
+            OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
         }
     }
 
     /* Yield if we suspended the TCB on another core */
     else {
         for(i = 0; i < portNUM_PROCESSORS; ++i){
-            if(tcb == OS_current_TCB[i]) {
+            if(tcb == _OS_get_current_tcb_from_core(i)) {
                 if(OS_scheduler_running == OS_TRUE){
                     _OS_schedule_yield_other_core(i, tcb->priority); 
                 }
                 else {
-                    OS_yield_pending_list[i] = OS_TRUE;
+                    OS_schedule_CPU[i].yield_pending = OS_TRUE;
                 }
                 break;
             }
@@ -751,7 +799,7 @@ int OS_schedule_suspend_task(TCB_t *tcb)
 
     portENTER_CRITICAL(&OS_schedule_mutex);
     if(tcb == NULL) {
-        tcb = OS_current_TCB[xPortGetCoreID()];
+        tcb = _OS_get_current_TCB();
     }
 
     /* We need to remove the task list off of either the list it is currently on */
@@ -789,24 +837,24 @@ int OS_schedule_suspend_task(TCB_t *tcb)
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
     /* Yield if we suspended the TCB on this core */
-    if(tcb == OS_current_TCB[xPortGetCoreID()]) {
+    if(tcb == _OS_get_current_TCB()) {
         if(OS_scheduler_running == OS_TRUE){
             portYIELD_WITHIN_API();
         }
         else {
-            OS_yield_pending_list[xPortGetCoreID()] = OS_TRUE;
+            OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
         }
     }
 
     /* Yield if we suspended the TCB on another core */
     else {
         for(i = 0; i < portNUM_PROCESSORS; ++i){
-            if(tcb == OS_current_TCB[i]) {
+            if(tcb == _OS_get_current_tcb_from_core(i)) {
                 if(OS_scheduler_running == OS_TRUE){
                     _OS_schedule_yield_other_core(i, tcb->priority); 
                 }
                 else {
-                    OS_yield_pending_list[i] = OS_TRUE;
+                    OS_schedule_CPU[i].yield_pending = OS_TRUE;
                 }
                 break;
             }
@@ -876,12 +924,12 @@ int OS_schedule_resume_task(TCB_t *tcb)
     portEXIT_CRITICAL(&OS_schedule_mutex);
     
     /* Run the resumed task if its priority is greater than any running task */
-    if(tcb->priority > OS_current_TCB[xPortGetCoreID()]->priority) {
+    if(tcb->priority > _OS_get_current_TCB()->priority) {
         portYIELD_WITHIN_API();
     }
     else {
         for(i = 0; i < portNUM_PROCESSORS; ++i){
-           if(tcb->priority > OS_current_TCB[i]->priority) {
+           if(tcb->priority > _OS_get_current_tcb_from_core(i)->priority) {
                _OS_schedule_yield_other_core(i, tcb->priority); 
                break;
            }
@@ -912,7 +960,7 @@ OSBool_t OS_schedule_process_tick(void)
     uint8_t context_switch_required = OS_FALSE;
 
     /* Make sure we yield at the end if a yield is pending */
-    if(OS_yield_pending_list[xPortGetCoreID()] == OS_TRUE) {
+    if(OS_schedule_CPU[xPortGetCoreID()].yield_pending == OS_TRUE) {
         context_switch_required = OS_TRUE;
     }
 
@@ -927,7 +975,7 @@ OSBool_t OS_schedule_process_tick(void)
     }
 
     /* Any core can unwind pending ticks while resuming all tasks */
-    if( OS_suspended_schedulers_list[ xPortGetCoreID() ] != OS_FALSE) {
+    if(OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended != OS_FALSE) {
         ++OS_pending_ticks;
         return context_switch_required;
     }
@@ -962,7 +1010,7 @@ OSBool_t OS_schedule_process_tick(void)
     }
 
     /* If our current task is in a round robin list, we will have to switch */
-    if(OS_ready_list[OS_current_TCB[xPortGetCoreID()]->priority].num_tasks > 1){
+    if(OS_ready_list[_OS_get_current_TCB()->priority].num_tasks > 1){
         context_switch_required = OS_TRUE;
     }
     
@@ -1048,9 +1096,9 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
 	}
 
     /* We raised a task's priority but its not the current task */
-    if(new_prio > old_prio && tcb != OS_current_TCB[xPortGetCoreID()]) {
+    if(new_prio > old_prio && tcb != _OS_get_current_TCB()) {
         /* Should run on this core right now */
-        if(tcb->core_ID == xPortGetCoreID() && new_prio >= OS_current_TCB[xPortGetCoreID()]->priority) {
+        if(tcb->core_ID == xPortGetCoreID() && new_prio >= _OS_get_current_TCB()->priority) {
             context_switch_required = OS_TRUE;
         }
         /* Might run on the other core right now */
@@ -1060,7 +1108,7 @@ int OS_schedule_change_task_prio(TCB_t *tcb, TaskPrio_t new_prio)
     }
 
     /* Reducing the priority of the current task */
-    if(old_prio > new_prio && tcb == OS_current_TCB[xPortGetCoreID()]) {
+    if(old_prio > new_prio && tcb == _OS_get_current_TCB()) {
         context_switch_required = OS_TRUE;
     }
 
@@ -1098,7 +1146,7 @@ void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
     portENTER_CRITICAL(&OS_schedule_mutex);
 
     if(mutex_holder == NULL || 
-            (mutex_holder->priority >= OS_current_TCB[xPortGetCoreID()]->priority)) {
+            (mutex_holder->priority >= _OS_get_current_TCB()->priority)) {
         portEXIT_CRITICAL(&OS_schedule_mutex);
         return;
     }
@@ -1108,16 +1156,16 @@ void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder)
 	priority.  Only reset the event list item value if the value is
 	not	being used for anything else. */
 	if( ( listGET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ) ) & taskEVENT_LIST_ITEM_VALUE_IN_USE ) == 0UL ){
-		listSET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) OS_current_TCB[ xPortGetCoreID() ]->priority);
+		listSET_LIST_ITEM_VALUE( &( mutex_holder->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) _OS_get_current_TCB()->priority);
 	}
 
     if(mutex_holder->task_state == OS_TASK_STATE_READY || mutex_holder->task_state == OS_TASK_STATE_RUNNING) {
         _OS_ready_list_remove(mutex_holder);
-        mutex_holder->priority = OS_current_TCB[xPortGetCoreID()]->priority;
+        mutex_holder->priority = _OS_get_current_TCB()->priority;
         _OS_ready_list_insert(mutex_holder);
     }
     else {
-       mutex_holder->priority = OS_current_TCB[xPortGetCoreID()]->priority; 
+       mutex_holder->priority = _OS_get_current_TCB()->priority; 
     }
     portEXIT_CRITICAL(&OS_schedule_mutex);
 
@@ -1199,7 +1247,7 @@ OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder)
 
 TCB_t* OS_schedule_get_idle_tcb(int core_ID)
 {
-    TCB_t *idle = OS_idle_tcb_list[core_ID];
+    TCB_t *idle = OS_schedule_CPU[core_ID].idle_tcb;
     return idle;
 }
 
@@ -1222,7 +1270,7 @@ TCB_t* OS_schedule_get_current_tcb(void)
     TCB_t *current_tcb;
 
     unsigned state = portENTER_CRITICAL_NESTED();
-    current_tcb = OS_current_TCB[xPortGetCoreID()];
+    current_tcb = _OS_get_current_TCB();
     portEXIT_CRITICAL_NESTED(state);
 
     return current_tcb;
@@ -1250,7 +1298,7 @@ TCB_t* OS_schedule_get_current_tcb_from_core(int core_ID)
     TCB_t *current_tcb = NULL;
 
     unsigned state = portENTER_CRITICAL_NESTED();
-    current_tcb = OS_current_TCB[core_ID];
+    current_tcb = _OS_get_current_tcb_from_core(core_ID);
     portEXIT_CRITICAL_NESTED(state);
 
     return current_tcb;
@@ -1279,7 +1327,7 @@ OSScheduleState_t OS_schedule_get_state(void)
     if (OS_scheduler_running == OS_FALSE) {
         current_state = OS_SCHEDULE_STATE_STOPPED;
     }
-    else if (OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE) {
+    else if (OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended != OS_FALSE) {
         current_state = OS_SCHEDULE_STATE_SUSPENDED;
     }
     else {
@@ -1350,10 +1398,10 @@ void * OS_schedule_increment_task_mutex_count(void)
 {
     TCB_t *cur_tcb;
     portENTER_CRITICAL(&OS_schedule_mutex);
-    if(OS_current_TCB[xPortGetCoreID()] != NULL) {
-        OS_current_TCB[xPortGetCoreID()]->mutexes_held++;
+    if(_OS_get_current_TCB() != NULL) {
+        _OS_get_current_TCB()->mutexes_held++;
     }
-    cur_tcb = OS_current_TCB[xPortGetCoreID()];
+    cur_tcb = _OS_get_current_TCB();
     portEXIT_CRITICAL(&OS_schedule_mutex);
     return cur_tcb;
 }
@@ -1392,7 +1440,7 @@ OSBool_t OS_schedule_check_for_timeout( TimeOut_t * const timeout, TickType_t * 
 
 void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio )
 {
-	TCB_t *cur_tcb = OS_current_TCB[core_ID];
+	TCB_t *cur_tcb = _OS_get_current_tcb_from_core(core_ID);
 	int i;
 
 	if (core_ID != CORE_NO_AFFINITY) {
@@ -1405,7 +1453,7 @@ void _OS_schedule_yield_other_core(int core_ID, TaskPrio_t prio )
 	{
 		/* The task has no affinity. See if we can find a CPU to put it on.*/
 		for (i=0; i< portNUM_PROCESSORS; i++) {
-			if (i != xPortGetCoreID() && OS_current_TCB[i]->priority < prio)
+			if (i != xPortGetCoreID() && _OS_get_current_tcb_from_core(i)->priority < prio)
 			{
 				vPortYieldOtherCore( i );
 				break;
@@ -1423,7 +1471,7 @@ void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const Tick
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
-    cur_tcb = OS_current_TCB[xPortGetCoreID()];
+    cur_tcb = _OS_get_current_TCB();
 
     vListInsert( pxEventList, &(cur_tcb->xEventListItem ) );
     /* I (right now) believe it will be necessary to assume the task is ready */
@@ -1455,7 +1503,7 @@ void OS_schedule_place_task_on_events_list_restricted(List_t * const pxEventList
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
-    cur_tcb = OS_current_TCB[xPortGetCoreID()];
+    cur_tcb = _OS_get_current_TCB();
 
     vListInsertEnd( pxEventList, &( cur_tcb->xEventListItem ) );
     
@@ -1485,7 +1533,7 @@ void OS_schedule_place_task_on_unordered_events_list(List_t *pxEventList, const 
 
     portENTER_CRITICAL(&OS_schedule_mutex);
 
-    cur_tcb = OS_current_TCB[xPortGetCoreID()];
+    cur_tcb = _OS_get_current_TCB();
 
     listSET_LIST_ITEM_VALUE( &( cur_tcb->xEventListItem ), item_value | taskEVENT_LIST_ITEM_VALUE_IN_USE );
     vListInsertEnd( pxEventList, &( cur_tcb->xEventListItem ) );
@@ -1544,14 +1592,14 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 	if ( unblocked_tcb->core_ID == CORE_NO_AFFINITY ) {
 		target_cpu = xPortGetCoreID();
 		for (i = 0; i < portNUM_PROCESSORS; i++) {
-			if ( OS_suspended_schedulers_list[ i ] == OS_FALSE) {
+			if (OS_schedule_CPU[i].scheduler_suspended == OS_FALSE) {
 				task_can_be_ready = OS_TRUE;
 				break;
 			}
 		}
 	} else {
 		target_cpu = unblocked_tcb->core_ID;
-		task_can_be_ready = OS_suspended_schedulers_list[target_cpu] == OS_FALSE;
+		task_can_be_ready = OS_schedule_CPU[target_cpu].scheduler_suspended == OS_FALSE;
 	}
 
     switch(unblocked_tcb->task_state){
@@ -1590,7 +1638,7 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
         unblocked_tcb->task_state = OS_TASK_STATE_PENDING_READY;
 	}
 
-	if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
+	if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= _OS_get_current_TCB()->priority )
 	{
 		/* Return true if the task removed from the event list has a higher
 		priority than the calling task.  This allows the calling task to know if
@@ -1599,7 +1647,7 @@ int OS_schedule_remove_task_from_event_list(const List_t * const pxEventList)
 
 		/* Mark that a yield is pending in case the user is not using the
 		"xHigherPriorityTaskWoken" parameter to an ISR safe FreeRTOS function. */
-		OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+		OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
 	}
 	else if ( unblocked_tcb->core_ID != xPortGetCoreID() )
 	{
@@ -1635,7 +1683,7 @@ int OS_schedule_remove_task_from_unordered_events_list(ListItem_t * pxEventListI
     int ret_val;
 
     portENTER_CRITICAL(&OS_schedule_mutex);
-    assert(OS_suspended_schedulers_list[xPortGetCoreID()] != OS_FALSE);
+    assert(OS_schedule_CPU[xPortGetCoreID()].scheduler_suspended != OS_FALSE);
 
     listSET_LIST_ITEM_VALUE( pxEventListItem, item_value | taskEVENT_LIST_ITEM_VALUE_IN_USE );
 
@@ -1668,7 +1716,7 @@ int OS_schedule_remove_task_from_unordered_events_list(ListItem_t * pxEventListI
     unblocked_tcb->task_state = OS_TASK_STATE_READY;
     _OS_ready_list_insert(unblocked_tcb);
 
-    if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= OS_current_TCB[ xPortGetCoreID() ]->priority )
+    if ( (unblocked_tcb->core_ID == xPortGetCoreID() || unblocked_tcb->core_ID == CORE_NO_AFFINITY) && unblocked_tcb->priority >= _OS_get_current_TCB()->priority )
 	{
 		/* Return true if the task removed from the event list has
 		a higher priority than the calling task.  This allows
@@ -1678,7 +1726,7 @@ int OS_schedule_remove_task_from_unordered_events_list(ListItem_t * pxEventListI
 
 		/* Mark that a yield is pending in case the user is not using the
 		"xHigherPriorityTaskWoken" parameter to an ISR safe FreeRTOS function. */
-		OS_yield_pending_list[ xPortGetCoreID() ] = OS_TRUE;
+		OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
 	}
 	else if ( unblocked_tcb->core_ID != xPortGetCoreID() )
 	{
@@ -1698,11 +1746,11 @@ TickType_t OS_schedule_reset_task_event_item_value(void)
 {
     TickType_t ret_val;
     portENTER_CRITICAL(&OS_schedule_mutex);
-    ret_val = listGET_LIST_ITEM_VALUE( &( OS_current_TCB[ xPortGetCoreID() ]->xEventListItem ) );
+    ret_val = listGET_LIST_ITEM_VALUE( &( _OS_get_current_TCB()->xEventListItem ) );
 
 	/* Reset the event list item to its normal value - so it can be used with
 	queues and semaphores. */
-	listSET_LIST_ITEM_VALUE( &( OS_current_TCB[ xPortGetCoreID() ]->xEventListItem ), ( ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) OS_current_TCB[ xPortGetCoreID() ]->priority ) ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
+	listSET_LIST_ITEM_VALUE( &( _OS_get_current_TCB()->xEventListItem ), ( ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) _OS_get_current_TCB()->priority ) ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
 	portEXIT_CRITICAL(&OS_schedule_mutex);
 
 	return ret_val;
@@ -1961,7 +2009,7 @@ static OSBool_t _OS_delayed_list_wakeup_next_task(void)
     }
 
     /* Does the woken task have a higher priority than the running task? */
-    if(woken_task->priority >= OS_current_TCB[xPortGetCoreID()]->priority){
+    if(woken_task->priority >= _OS_get_current_TCB()->priority){
         context_switch_required = OS_TRUE;
     }
 
@@ -2008,8 +2056,8 @@ static void _OS_pending_ready_list_schedule_next_task(void)
     _OS_ready_list_insert(scheduled_tcb);
 
     /* TODO First part of if statement should be unnecessary. Remove */
-    if((scheduled_tcb->core_ID == xPortGetCoreID() || scheduled_tcb->core_ID == CORE_NO_AFFINITY) && (scheduled_tcb->priority >= OS_current_TCB[core_ID]->priority)) {
-        OS_yield_pending_list[core_ID] = OS_TRUE;
+    if((scheduled_tcb->core_ID == xPortGetCoreID() || scheduled_tcb->core_ID == CORE_NO_AFFINITY) && (scheduled_tcb->priority >= _OS_get_current_tcb_from_core(core_ID)->priority)) {
+        OS_schedule_CPU[core_ID].yield_pending = OS_TRUE;
     }
 }
 

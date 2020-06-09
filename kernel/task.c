@@ -188,7 +188,9 @@ int OS_task_delete(TCB_t *tcb)
 
 char * OS_task_get_name(TCB_t *tcb)
 {
-    assert(tcb);
+    if(tcb == NULL){
+        tcb = OS_schedule_get_current_tcb();
+    }
     return &(tcb->task_name[0]);
 }
 
@@ -210,7 +212,9 @@ char * OS_task_get_name(TCB_t *tcb)
 
 int OS_task_get_core_ID(TCB_t *tcb)
 {
-    assert(tcb);
+    if(tcb == NULL){
+        tcb = OS_schedule_get_current_tcb();
+    }
     return tcb->core_ID;
 }
 
