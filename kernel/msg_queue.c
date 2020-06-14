@@ -122,23 +122,42 @@ int OS_msg_queue_create(void ** queue_ptr, int queue_size)
 }
 
 /*******************************************************************************
-* OS Message Queue Init
+* OS Message Queue Delete
 *
-*   msg_queue = 
-*   queue_size = 
+*   msg_queue = a pointer to the msg queue to delete
 * 
 * PURPOSE : 
-*   
+*  
+*   Destroy a message queue. Free up all of its waiting tasks and return all of
+*   the contained messages back into the message pool
 * 
 * RETURN :
 *   
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occured
 *
 * NOTES: 
 *******************************************************************************/
 
 int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 {
-    configASSERT(OS_FALSE);
+    assert(msg_queue);
+
+    Message_t *retrieved_message;
+
+    portENTER_CRITICAL(&(msg_queue->mux));
+    OS_schedule_waitlist_empty(&(msg_queue->reveive_waiters));
+    OS_schedule_waitlist_empty(&(msg_queue->send_waiters));
+
+    while(msg_queue->num_messages != 0) {
+        retrieved_message = _OS_msg_queue_pop(msg_queue);
+
+        /* We are done with this message. Add to the pool for future re-use */
+        portENTER_CRITICAL(&OS_message_mutex);
+        _OS_msg_pool_insert(retrieved_message);
+        portEXIT_CRITICAL(&OS_message_mutex);
+    }
+    portEXIT_CRITICAL(&(msg_queue->mux));
+    free(msg_queue);
     return OS_NO_ERROR;
 }
 
