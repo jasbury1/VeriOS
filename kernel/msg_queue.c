@@ -216,10 +216,17 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
             return OS_NO_ERROR;
         }
 
-        /* We were unable to add the message due to queue being full */
+        /* We were unable to add the message */
+
+        /* The queue was destroyed */
+        if(msg_queue == NULL) {
+            portEXIT_CRITICAL(&(msg_queue->mux));
+            return OS_ERROR_RESOURCE_DESTROYED;
+        }
 
         /* The timeout already went off, but we were unable to find queue room */
         if(timeout_set == OS_TRUE) {
+            portEXIT_CRITICAL(&(msg_queue->mux));
             return OS_ERROR_QUEUE_FULL;
         }
 
@@ -270,7 +277,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 *
 *   Use portMAX_DELAY as the timeout if this call should not time out
 *******************************************************************************/
-
+/* TODO: Change types later so that this returns an error msg */
 void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 {
     OSBool_t timeout_set = OS_FALSE;
@@ -310,8 +317,9 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
 
         /* We were unable to read because no messages were sent */
 
-        /* The timeout already went off, but no messages were added to the queue */
-        if(timeout_set == OS_TRUE) {
+        /* The timeout already went off or the queue was destroyed */
+        if(timeout_set == OS_TRUE || msg_queue == NULL) {
+            portEXIT_CRITICAL(&(msg_queue->mux));
             return NULL;
         }
 

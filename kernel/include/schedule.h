@@ -68,7 +68,9 @@ void OS_schedule_raise_priority_mutex_holder(TCB_t *mutex_holder);
 
 OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder);
 
-TaskPrio_t OS_task_get_priority(TCB_t *tcb);
+int OS_schedule_join_list_insert(TCB_t *waiter, TCB_t *tcb_to_join, TickType_t timeout);
+
+void OS_schedule_waitlist_empty(WaitList_t *waitlist);
 
 OSBool_t OS_schedule_process_tick(void);
 

@@ -14,6 +14,7 @@ task.h is included from an application file. */
 #include "FreeRTOS_old.h"
 #include "verios.h"
 #include "task.h"
+#include "verios_time.h"
 #include "schedule.h"
 #include "verios_util.h"
 #include "timers.h"
@@ -217,6 +218,7 @@ void OS_schedule_init(void)
         cpu.switching_context = OS_FALSE;
         cpu.yield_pending = OS_FALSE;
     }
+    _OS_bitmap_reset_prios();
 }
 
 /*******************************************************************************
@@ -1227,6 +1229,83 @@ OSBool_t OS_schedule_revert_priority_mutex_holder(void * const mux_holder)
 	}
     portEXIT_CRITICAL(&OS_schedule_mutex);
     return ret_val;
+}
+
+/*******************************************************************************
+* OS Schedule Join List Insert
+*
+* PURPOSE : 
+*
+* RETURN : 
+*
+* NOTES: 
+*******************************************************************************/
+
+int OS_schedule_join_list_insert(TCB_t *waiter, TCB_t *tcb_to_join, TickType_t timeout)
+{
+    TickType_t wakeup_time;
+    portENTER_CRITICAL(&OS_schedule_mutex);
+    if(tcb_to_join->task_state == OS_TASK_STATE_PENDING_DELETION ||
+            tcb_to_join->task_state == OS_TASK_STATE_READY_TO_DELETE) {
+        portEXIT_CRITICAL(&OS_schedule_mutex);
+        return OS_TRUE;
+    }
+
+    _OS_waitlist_append(waiter, (tcb_to_join->join_waitlist));
+
+    _OS_ready_list_remove(waiter);
+    if(timeout == OS_NO_DELAY) {
+        waiter->task_state = OS_TASK_STATE_SUSPENDED;
+        _OS_suspended_list_insert(waiter);
+    }
+    else {
+        waiter->task_state = OS_TASK_STATE_DELAYED;
+        wakeup_time = timeout + OS_tick_counter;
+        waiter->delay_wakeup_time = wakeup_time;
+        _OS_delayed_list_insert(waiter);
+    }
+
+    portEXIT_CRITICAL(&OS_schedule_mutex);
+    portYIELD_WITHIN_API();
+    return OS_NO_ERROR;
+}
+
+/*******************************************************************************
+* OS Schedule waitlist Empty
+*
+* PURPOSE : 
+*   
+*   If a waitlist is about to be destroyed (i.e. The resource containing the
+*   waitlist has been destroyed), the tasks are all made ready and placed
+*   back into circulation again
+*
+* RETURN : 
+*
+* NOTES: 
+*
+*   Yield is not called by this function. It waits for the next clock interrupt
+*   to determine whether to reschedule
+*******************************************************************************/
+
+void OS_schedule_waitlist_empty(WaitList_t *waitlist)
+{
+    TCB_t *popped_tcb;
+
+    portENTER_CRITICAL(&OS_schedule_mutex);
+  
+    while(waitlist->num_tasks != 0) {
+        popped_tcb = _OS_waitlist_pop_head(waitlist);
+        if(popped_tcb->task_state == OS_TASK_STATE_DELAYED){
+            _OS_delayed_list_remove(popped_tcb);
+        }
+        else if(popped_tcb->task_state == OS_TASK_STATE_SUSPENDED){
+            _OS_suspended_list_remove(popped_tcb);
+        }
+        popped_tcb->delay_wakeup_time = 0;
+        popped_tcb->task_state = OS_TASK_STATE_READY;
+        _OS_ready_list_insert(popped_tcb);
+    }
+    portEXIT_CRITICAL(&OS_schedule_mutex);
 }
 
 /*******************************************************************************

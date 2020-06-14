@@ -156,10 +156,14 @@ int OS_task_delete(TCB_t *tcb)
         return OS_ERROR_IDLE_DELETE;
     }
 
+    /* Remove this task from the scheduler */
     ret_val = OS_schedule_remove_task(tcb);
     if(ret_val != OS_NO_ERROR) {
         return ret_val;
     }
+
+    /* Schedule all tasks trying to join this task */
+    OS_schedule_waitlist_empty(tcb->join_waitlist);
 
     /* See if the task is ready to be deleted and freed now */
     if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
@@ -168,6 +172,34 @@ int OS_task_delete(TCB_t *tcb)
         _OS_task_delete_TCB(tcb);
     }
     return 0;
+}
+
+/*******************************************************************************
+* OS Task Join
+*
+* PURPOSE :
+*
+* RETURN : 
+*
+*
+* NOTES: 
+*******************************************************************************/
+
+int OS_task_join(TCB_t *tcb, TickType_t timeout)
+{
+    assert(tcb);
+
+    int ret_val;
+    TCB_t *waiter = OS_schedule_get_current_tcb();
+    if(tcb->join_waitlist == NULL) {
+        tcb->join_waitlist = malloc(sizeof(WaitList_t));
+        tcb->join_waitlist->head_ptr = NULL;
+        tcb->join_waitlist->tail_ptr = NULL;
+        tcb->join_waitlist->num_tasks = 0;
+    }
+
+    ret_val = OS_schedule_join_list_insert(waiter, tcb, timeout);
+    return ret_val;
 }
 
 /*******************************************************************************
@@ -390,7 +422,10 @@ static void _OS_task_delete_TCB(TCB_t *tcb)
     if(tcb->is_static == OS_FALSE) {
         /* Free the stack and TCB itself */
         vPortFreeAligned(tcb->stack_start);
-		vPortFree(tcb);
+		free(tcb);
+    }
+    if(tcb->join_waitlist != NULL){
+        free(tcb->join_waitlist);
     }
     /* Stack is statically allocated */
     else {
@@ -418,6 +453,9 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
     tcb->waitlist = NULL;
     tcb->waitlist_next_ptr = NULL;
     tcb->waitlist_prev_ptr = NULL;
+
+    /* Initialize join waitlist to null for now */
+    tcb->join_waitlist = NULL;
 
     /* Take care of event list systems as we are reliant on FreeRTOS for
         Semaphores/queues/timers */

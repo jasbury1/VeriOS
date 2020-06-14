@@ -20,21 +20,6 @@
 #include "portable.h"
 
 /*******************************************************************************
-* MACROS
-*******************************************************************************/
-
-#define OS_TRUE (uint8_t)1
-#define OS_FALSE (uint8_t)0
-
-#define OS_MAX_PRIORITIES 256
-
-#define OS_MAX_MSG_QUEUE_SIZE INT_MAX
-
-#ifndef OS_PRIVILEGE_BIT
-    #define OS_PRIVILEGE_BIT ((uint8_t) 0x00)
-#endif /* OS_PRIVILEGE_BIT */ 
-
-/*******************************************************************************
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
@@ -77,6 +62,10 @@ typedef enum OS_error_codes {
     /* Task IPC */
     OS_ERROR_NO_TASK_QUEUE,
 
+    /* Waiting on a resource */
+    OS_ERROR_TIMER_EXPIRED,
+    OS_ERROR_RESOURCE_DESTROYED,
+
     OS_OTHER_ERROR
 } OSError_t;
 
@@ -99,6 +88,21 @@ struct OSCPU {
 
 
 typedef struct OSTaskListHeader WaitList_t;
+
+/*******************************************************************************
+* MACROS
+*******************************************************************************/
+
+#define OS_TRUE (OSBool_t)1
+#define OS_FALSE (OSBool_t)0
+
+#define OS_MAX_PRIORITIES 256
+
+#define OS_MAX_MSG_QUEUE_SIZE INT_MAX
+
+#ifndef OS_PRIVILEGE_BIT
+    #define OS_PRIVILEGE_BIT ((uint8_t) 0x00)
+#endif /* OS_PRIVILEGE_BIT */ 
 
 /*******************************************************************************
 * FUNCTION HEADERS

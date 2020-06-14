@@ -104,7 +104,10 @@ struct OSTaskControlBlock
     /* Data for if the task is in a waiting list */
     TCB_t *waitlist_next_ptr;
     TCB_t *waitlist_prev_ptr;
-    struct OSTaskListHeader *waitlist;
+    WaitList_t *waitlist;
+
+    /* Tasks waiting on this task to die */
+    WaitList_t *join_waitlist;
 
     /* Thread local storage pointers*/
     TLSPtr_t TLS_table[configNUM_THREAD_LOCAL_STORAGE_POINTERS];
@@ -134,6 +137,8 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, void ** const tcb_ptr);
 
 int OS_task_delete(TCB_t *tcb);
+
+int OS_task_join(TCB_t *tcb, TickType_t timeout);
 
 char * OS_task_get_name(TCB_t *tcb);
 
