@@ -150,4 +150,8 @@ void *OS_task_get_TLS_ptr(TCB_t *tcb, int index);
 
 void OS_task_set_TLS_ptr(TCB_t *tcb, int index, void *value, TLSPtrDeleteCallback_t callback);
 
+int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data);
+
+int OS_task_receive_msg(TickType_t timeout, void ** data);
+
 #endif /* OS_TASK_H */

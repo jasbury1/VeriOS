@@ -47,12 +47,14 @@ typedef struct OSMessagePool {
 
 int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data);
 
-void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout);
+int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** msg);
 
 void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size);
 
 int OS_msg_queue_create(void ** queue_ptr, int queue_size);
 
 int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data);
+
+int OS_msg_queue_try_receive(MessageQueue_t *msg_queue, void ** data);
 
 #endif /* OS_MSG_QUEUE_H */

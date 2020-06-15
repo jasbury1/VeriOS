@@ -158,6 +158,7 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
     }
     portEXIT_CRITICAL(&(msg_queue->mux));
     free(msg_queue);
+    msg_queue = NULL;
     return OS_NO_ERROR;
 }
 
@@ -296,8 +297,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 *
 *   Use portMAX_DELAY as the timeout if this call should not time out
 *******************************************************************************/
-/* TODO: Change types later so that this returns an error msg */
-void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
+int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** data)
 {
     OSBool_t timeout_set = OS_FALSE;
     Message_t *retrieved_message = NULL;
@@ -330,16 +330,24 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
                 /* Schedule the task that was waiting on a new message */
                 OS_schedule_resume_task(waiting_sender);
             }
-
-            return msg_contents;
+            *data = msg_contents;
+            return OS_NO_ERROR;
         }
 
         /* We were unable to read because no messages were sent */
 
-        /* The timeout already went off or the queue was destroyed */
-        if(timeout_set == OS_TRUE || msg_queue == NULL) {
+        /* The queue was destroyed */
+        if(msg_queue == NULL){
             portEXIT_CRITICAL(&(msg_queue->mux));
-            return NULL;
+            *data = NULL;
+            return OS_ERROR_RESOURCE_DESTROYED;
+        }
+
+        /* The timeout expired */
+        if(timeout_set == OS_TRUE) {
+            portEXIT_CRITICAL(&(msg_queue->mux));
+            *data = NULL;
+            return OS_ERROR_TIMER_EXPIRED;
         }
 
         /* Add the task to a waitlist so that it can be woken up if theres room in the queue */
@@ -362,6 +370,7 @@ void *OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout)
             portYIELD_WITHIN_API();
         }
     }
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -453,7 +462,7 @@ int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
 *   queue is empty. Use OS_msg_queue_pend for the blocking equivalent
 *******************************************************************************/
 
-void * OS_msg_queue_try_receive(MessageQueue_t *msg_queue)
+int OS_msg_queue_try_receive(MessageQueue_t *msg_queue, void ** data)
 {
     Message_t *retrieved_message = NULL;
     TCB_t *waiting_sender = NULL;
@@ -484,10 +493,12 @@ void * OS_msg_queue_try_receive(MessageQueue_t *msg_queue)
             OS_schedule_resume_task(waiting_sender);
         }
 
-        return msg_contents;
+        *data = msg_contents;
+        return OS_NO_ERROR;
     }
     portEXIT_CRITICAL(&(msg_queue->mux));
-    return NULL;    
+    *data = NULL;
+    return OS_ERROR_QUEUE_EMPTY;
 }
 
 /*******************************************************************************

@@ -379,16 +379,16 @@ int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data)
 * NOTES: 
 *******************************************************************************/
 
-void * OS_task_receive_msg(TickType_t timeout)
+int OS_task_receive_msg(TickType_t timeout, void ** data)
 {
     TCB_t *cur_tcb;
-    void * msg;
+    int ret_val;
 
     cur_tcb = OS_schedule_get_current_tcb();
     assert(cur_tcb);
 
-    msg = OS_msg_queue_pend(&(cur_tcb->msg_queue), timeout);
-    return msg;
+    ret_val = OS_msg_queue_pend(&(cur_tcb->msg_queue), timeout, data);
+    return ret_val;
 }
 
 /*******************************************************************************
