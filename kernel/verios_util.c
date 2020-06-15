@@ -98,8 +98,7 @@ void _OS_waitlist_append(TCB_t *tcb, WaitList_t *waitlist)
 void _OS_waitlist_remove(TCB_t *tcb)
 {
     WaitList_t *waitlist = tcb->waitlist;
-    
-    configASSERT(waitlist != NULL);
+    assert(waitlist);
     
     /* Removing the only task */
     if(waitlist->num_tasks == 1) {
@@ -150,7 +149,7 @@ void _OS_waitlist_remove(TCB_t *tcb)
 TCB_t * _OS_waitlist_pop_head(WaitList_t *waitlist)
 {
     TCB_t *head;
-    configASSERT(waitlist->head_ptr != NULL);
+    assert(waitlist->head_ptr);
 
     head = waitlist->head_ptr;
 
@@ -165,6 +164,8 @@ TCB_t * _OS_waitlist_pop_head(WaitList_t *waitlist)
     }
     /* This task is no longer on a waitlist */
     head->waitlist = NULL;
+    head->waitlist_next_ptr = NULL;
+    head->waitlist_prev_ptr = NULL;
 
     return head;
 }

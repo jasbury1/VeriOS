@@ -60,7 +60,7 @@ PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_deleted = 0;
 PRIVILEGED_DATA static volatile unsigned int OS_num_tasks_delayed = 0;
 
 /* A counter for the time to unblock the next task that is blocked */
-PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = portMAX_DELAY;
+PRIVILEGED_DATA static volatile TickType_t OS_next_task_unblock_time = OS_NO_TIMEOUT;
 
 /* One mutex for use in scheduler actions */
 PRIVILEGED_DATA static portMUX_TYPE OS_schedule_mutex = portMUX_INITIALIZER_UNLOCKED;
@@ -650,6 +650,12 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 		( void ) uxListRemove( &( old_tcb->xEventListItem ) );
     }
 
+    /* Remove the task from any resource waitlists it is on */
+    if(old_tcb->waitlist != NULL) {
+        _OS_waitlist_remove(old_tcb);
+    }
+
+    /* schedule all tasks waiting on this task's deletion */
     if(old_tcb->join_waitlist != NULL){
         OS_schedule_waitlist_empty(old_tcb->join_waitlist);
     }
@@ -708,7 +714,6 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
     }
 
     portENTER_CRITICAL(&OS_schedule_mutex);
-    wakeup_time = tick_delay + OS_tick_counter;
     
     if(tcb == NULL){
         tcb = _OS_get_current_TCB();
@@ -739,12 +744,24 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
             return OS_ERROR_INVALID_TSK_STATE;
     }
 
-    /* Set the state of the current TCB to delayed */
-    tcb->task_state = OS_TASK_STATE_DELAYED;
+    /* This line is only necessary if still reliant on FreeRTOS API */
+    if( listLIST_ITEM_CONTAINER( &( tcb->xEventListItem ) ) != NULL )
+	{
+		( void ) uxListRemove( &( tcb->xEventListItem ) );
+	}
 
     /* Add to a list of delayed tasks */
-    tcb->delay_wakeup_time = wakeup_time;
-    _OS_delayed_list_insert(tcb);
+    if(tick_delay != OS_NO_TIMEOUT){
+        tcb->task_state = OS_TASK_STATE_DELAYED;
+        wakeup_time = tick_delay + OS_tick_counter;
+        tcb->delay_wakeup_time = wakeup_time;
+        _OS_delayed_list_insert(tcb);
+    }
+    /* Add to the list of suspended tasks */
+    else {
+        tcb->task_state = OS_TASK_STATE_SUSPENDED;
+        _OS_suspended_list_insert(tcb); 
+    }
 
     portEXIT_CRITICAL(&OS_schedule_mutex);
     
@@ -793,80 +810,9 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 *
 *******************************************************************************/
 
-/* TODO: This is its own API for now but one day I may merge with OS_schedule_delay_task */
-int OS_schedule_suspend_task(TCB_t *tcb)
+inline int OS_schedule_suspend_task(TCB_t *tcb)
 {
-    int i;
-
-    /* Scheduler must be running in order to delay a task */
-    if(OS_scheduler_running == OS_FALSE) {
-        return OS_ERROR_SCHEDULER_STOPPED;
-    }
-
-    portENTER_CRITICAL(&OS_schedule_mutex);
-    if(tcb == NULL) {
-        tcb = _OS_get_current_TCB();
-    }
-
-    /* We need to remove the task list off of either the list it is currently on */
-    switch(tcb->task_state) {
-        case OS_TASK_STATE_RUNNING:
-            _OS_ready_list_remove(tcb);
-            break;
-        case OS_TASK_STATE_READY:
-            _OS_ready_list_remove(tcb);
-            break;
-        case OS_TASK_STATE_DELAYED:
-            _OS_delayed_list_remove(tcb);
-            break;
-        case OS_TASK_STATE_SUSPENDED:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_NO_ERROR;
-        case OS_TASK_STATE_PENDING_DELETION:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_DELETED_TASK;
-        case OS_TASK_STATE_READY_TO_DELETE:
-            return OS_ERROR_DELETED_TASK;
-        default:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_INVALID_TSK_STATE;
-    }
-    tcb->task_state = OS_TASK_STATE_SUSPENDED;
-
-    /* This line is only necessary if still reliant on FreeRTOS API */
-    if( listLIST_ITEM_CONTAINER( &( tcb->xEventListItem ) ) != NULL )
-	{
-		( void ) uxListRemove( &( tcb->xEventListItem ) );
-	}
-
-    _OS_suspended_list_insert(tcb);
-    portEXIT_CRITICAL(&OS_schedule_mutex);
-
-    /* Yield if we suspended the TCB on this core */
-    if(tcb == _OS_get_current_TCB()) {
-        if(OS_scheduler_running == OS_TRUE){
-            portYIELD_WITHIN_API();
-        }
-        else {
-            OS_schedule_CPU[xPortGetCoreID()].yield_pending = OS_TRUE;
-        }
-    }
-
-    /* Yield if we suspended the TCB on another core */
-    else {
-        for(i = 0; i < portNUM_PROCESSORS; ++i){
-            if(tcb == _OS_get_current_tcb_from_core(i)) {
-                if(OS_scheduler_running == OS_TRUE){
-                    _OS_schedule_yield_other_core(i, tcb->priority); 
-                }
-                else {
-                    OS_schedule_CPU[i].yield_pending = OS_TRUE;
-                }
-                break;
-            }
-        }
-    }
-    return OS_NO_ERROR;
+    return OS_schedule_delay_task(tcb, OS_NO_TIMEOUT);
 }
 
 /*******************************************************************************
@@ -1258,7 +1204,7 @@ int OS_schedule_join_list_insert(TCB_t *waiter, TCB_t *tcb_to_join, TickType_t t
     _OS_waitlist_append(waiter, (tcb_to_join->join_waitlist));
 
     _OS_ready_list_remove(waiter);
-    if(timeout == OS_NO_DELAY) {
+    if(timeout == OS_NO_TIMEOUT) {
         waiter->task_state = OS_TASK_STATE_SUSPENDED;
         _OS_suspended_list_insert(waiter);
     }
@@ -1500,7 +1446,7 @@ OSBool_t OS_schedule_check_for_timeout( TimeOut_t * const timeout, TickType_t * 
     OSBool_t ret_val;
     portENTER_CRITICAL(&OS_schedule_mutex);
 
-    if(*ticks_to_wait == portMAX_DELAY) {
+    if(*ticks_to_wait == OS_NO_TIMEOUT) {
         ret_val = OS_FALSE;
     }
     if( ( OS_tick_overflow_counter != timeout->xOverflowCount ) && 
@@ -1564,7 +1510,7 @@ void OS_schedule_place_task_on_event_list(List_t * const pxEventList, const Tick
         assert(OS_FALSE);
     }
 
-    if(ticks_to_wait == portMAX_DELAY) {
+    if(ticks_to_wait == OS_NO_TIMEOUT) {
         _OS_suspended_list_insert(cur_tcb);
         cur_tcb->task_state = OS_TASK_STATE_SUSPENDED;
     }
@@ -1627,7 +1573,7 @@ void OS_schedule_place_task_on_unordered_events_list(List_t *pxEventList, const 
         assert(OS_FALSE);
     }
 
-    if(ticks_to_wait == portMAX_DELAY) {
+    if(ticks_to_wait == OS_NO_TIMEOUT) {
         _OS_suspended_list_insert(cur_tcb);
         cur_tcb->task_state = OS_TASK_STATE_SUSPENDED;
     }
@@ -1853,7 +1799,7 @@ static void _OS_update_next_task_unblock_time(void)
 {
     /* If the list of delayed tasks is empty */
     if(OS_delayed_list.head_ptr == NULL){
-        OS_next_task_unblock_time = portMAX_DELAY;
+        OS_next_task_unblock_time = OS_NO_TIMEOUT;
         return;
     }
     OS_next_task_unblock_time = OS_delayed_list.head_ptr->delay_wakeup_time;
