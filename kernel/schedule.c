@@ -650,6 +650,10 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 		( void ) uxListRemove( &( old_tcb->xEventListItem ) );
     }
 
+    if(old_tcb->join_waitlist != NULL){
+        OS_schedule_waitlist_empty(old_tcb->join_waitlist);
+    }
+
     /* Force a reschedule if the conditions require it */
     if(OS_scheduler_running == OS_TRUE){
         /* If the task is running on this core */
@@ -1290,9 +1294,8 @@ int OS_schedule_join_list_insert(TCB_t *waiter, TCB_t *tcb_to_join, TickType_t t
 void OS_schedule_waitlist_empty(WaitList_t *waitlist)
 {
     TCB_t *popped_tcb;
-
     portENTER_CRITICAL(&OS_schedule_mutex);
-  
+
     while(waitlist->num_tasks != 0) {
         popped_tcb = _OS_waitlist_pop_head(waitlist);
         if(popped_tcb->task_state == OS_TASK_STATE_DELAYED){

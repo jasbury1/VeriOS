@@ -158,20 +158,16 @@ int OS_task_delete(TCB_t *tcb)
 
     /* Remove this task from the scheduler */
     ret_val = OS_schedule_remove_task(tcb);
+    
+    /* Only get here if the task was deleted from another context */
     if(ret_val != OS_NO_ERROR) {
         return ret_val;
     }
+    assert(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE);
+    _OS_task_delete_TLS(tcb);
+    _OS_task_delete_TCB(tcb);
 
-    /* Schedule all tasks trying to join this task */
-    OS_schedule_waitlist_empty(tcb->join_waitlist);
-
-    /* See if the task is ready to be deleted and freed now */
-    if(tcb->task_state == OS_TASK_STATE_READY_TO_DELETE) {
-        /* Delete local storage pointers */
-        _OS_task_delete_TLS(tcb);
-        _OS_task_delete_TCB(tcb);
-    }
-    return 0;
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
