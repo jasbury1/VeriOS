@@ -26,7 +26,7 @@ BaseType_t xTaskCreatePinnedToCore(	TaskFunction_t pvTaskCode,
 										TaskHandle_t * const pvCreatedTask,
 										const BaseType_t xCoreID){
     const int core_ID = ((xCoreID >= 2 || xCoreID < 0) ? CORE_NO_AFFINITY : xCoreID);
-
+	int tid;
     int res = OS_task_create((TaskFunc_t) pvTaskCode,
 							 pvParameters,
 							 pcName,
@@ -34,7 +34,10 @@ BaseType_t xTaskCreatePinnedToCore(	TaskFunction_t pvTaskCode,
 							 usStackDepth,
 							 0,
 							 core_ID,
-							 pvCreatedTask);
+							 &tid);
+    if(pvCreatedTask != NULL) {
+		*pvCreatedTask = OS_task_get_tcb(tid);
+	}
 	if(res == 0){
 		return pdPASS;
 	}
@@ -300,4 +303,9 @@ UBaseType_t uxTaskGetSnapshotAll( TaskSnapshot_t * const pxTaskSnapshotArray, co
 	configASSERT(0 == 1);
 	return -1;
 }
+
+
+
+
+
 

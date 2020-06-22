@@ -33,8 +33,17 @@ privileged Vs unprivileged linkage and placement. */
 #define tskIDLE_STACK_SIZE	configIDLE_TASK_STACK_SIZE
 
 /*******************************************************************************
-* TASK CRITICAL DATA STRUCTURES
+* TASK CRITICAL STATE VARIABLES
 *******************************************************************************/
+
+PRIVILEGED_DATA static volatile TCB_t ** OS_tid_table = NULL;
+
+PRIVILEGED_DATA static volatile int OS_tid_table_size = 0;
+
+PRIVILEGED_DATA static volatile int OS_num_tasks = 0;
+
+PRIVILEGED_DATA static portMUX_TYPE OS_task_mutex = portMUX_INITIALIZER_UNLOCKED;
+
 
 /*******************************************************************************
 * STATIC FUNCTION DECLARATIONS
@@ -49,6 +58,8 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
 static void _OS_task_delete_TLS(TCB_t *tcb);
 
 static void _OS_task_delete_TCB(TCB_t *tcb);
+
+static void _OS_task_init_tid(TCB_t *task_tcb);
 
 /*******************************************************************************
 * OS Task Create
@@ -75,7 +86,7 @@ static void _OS_task_delete_TCB(TCB_t *tcb);
 *******************************************************************************/
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
-            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, void ** const tcb_ptr)
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, int *task_tid)
 {
     TCB_t *task_tcb;
     StackType_t *task_stack = NULL;
@@ -85,7 +96,6 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     if(prio == (TaskPrio_t)0 && strcmp(task_name, OS_IDLE_NAME) != 0) {
         return OS_ERROR_RESERVED_PRIORITY;
     }
-
 
     /* Make sure the stack size is valid */
     if(stack_size <= 0) {
@@ -104,29 +114,33 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
         vPortFree(task_stack);
         return OS_ERROR_TCB_ALLOC;
     }
-    
-    /* Handle message queue */
-    if(msg_queue_size > 0) {
-        /* TODO */
-    }
 
     _OS_task_init_stack(task_tcb, stack_size, task_stack, task_func, task_arg, prio);
     _OS_task_init_tcb(task_tcb, task_name, prio, stack_size, OS_FALSE, NULL, core_ID);
     
-    /* Set up the task's IPC system */
-    _OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
+    /* Get the task added to the tid table and set the task id */
+    portENTER_CRITICAL(&OS_task_mutex);
+    _OS_task_init_tid(task_tcb);
+    portEXIT_CRITICAL(&OS_task_mutex);
+    if(task_tid != NULL){ 
+        *task_tid = task_tcb->tid;
+    }
     
+    /* Handle message queue */
+    if(msg_queue_size > 0) {
+        _OS_msg_queue_init(&(task_tcb->msg_queue), msg_queue_size);
+    } 
+
     ret_val = OS_schedule_add_task(task_tcb);
     if(ret_val != OS_NO_ERROR) {
         return ret_val;
     }
 
-    if((void *)tcb_ptr != NULL){
-        *tcb_ptr = task_tcb;
-    }
-
     return OS_NO_ERROR;
 }
+
+
+    
 
 /*******************************************************************************
 * OS Task Delete
@@ -392,6 +406,27 @@ int OS_task_receive_msg(TickType_t timeout, void ** data)
 }
 
 /*******************************************************************************
+* OS Task Get Priority
+*
+*   tcb: A pointer to the desired TCB 
+* 
+* PURPOSE : 
+*
+*   Get the priority of the desired task
+* 
+* RETURN :
+*
+*   The priority assigned to the task
+*
+* NOTES: 
+*******************************************************************************/
+
+TCB_t * OS_task_get_tcb(int tid)
+{
+    return OS_tid_table[tid];
+}
+
+/*******************************************************************************
 * STATIC FUNCTION DEFINITIONS
 *******************************************************************************/
 
@@ -509,3 +544,19 @@ static void _OS_task_init_stack(TCB_t *tcb, int stack_size, StackType_t *stack_a
     tcb->stack_end = stack_top;
     tcb->stack_top = pxPortInitialiseStack(stack_top, task_func, task_arg, run_privileged);
 }
+
+static void _OS_task_init_tid(TCB_t *task_tcb)
+{
+    if(OS_tid_table == NULL) {
+        OS_tid_table = calloc(OS_TID_TABLE_INITIAL_SIZE, sizeof(TCB_t *));
+        OS_tid_table_size = OS_TID_TABLE_INITIAL_SIZE;
+    }
+    else if(OS_tid_table_size == OS_num_tasks){
+        OS_tid_table_size *= 2;
+        realloc(OS_tid_table, OS_tid_table_size * sizeof(TCB_t *));
+    }
+    task_tcb->tid = OS_num_tasks;
+    OS_tid_table[task_tcb->tid] = task_tcb;
+    ++OS_num_tasks;
+}
+

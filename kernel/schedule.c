@@ -242,11 +242,13 @@ int OS_schedule_start(void)
 {
     int i;
     int ret_val;
+    int tid;
 
     for(i = 0; i < portNUM_PROCESSORS; ++i) {
         if(OS_schedule_CPU[i].idle_tcb == NULL){
             ret_val = OS_task_create(OS_IDLE_TASK, NULL, OS_IDLE_NAME, 0, 
-                    OS_IDLE_STACK_SIZE, 0, i, (void **)(&(OS_schedule_CPU[i].idle_tcb)));
+                    OS_IDLE_STACK_SIZE, 0, i, &tid);
+            OS_schedule_CPU[i].idle_tcb = OS_task_get_tcb(tid);
             if(ret_val != OS_NO_ERROR){
                 return ret_val;
             }
