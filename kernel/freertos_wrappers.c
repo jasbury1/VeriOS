@@ -63,7 +63,10 @@ void vTaskDelayUntil( TickType_t * const pxPreviousWakeTime, const TickType_t xT
 }
 
 UBaseType_t uxTaskPriorityGet( TaskHandle_t xTask ) {
-	return (UBaseType_t)OS_task_get_priority((TCB_t*)xTask);	
+	if(xTask == NULL){
+		return (UBaseType_t)OS_task_get_priority(OS_CURRENT_TASK);	
+	}
+	return (UBaseType_t)OS_task_get_priority(((TCB_t*)xTask)->tid);	
 }
 
 UBaseType_t uxTaskPriorityGetFromISR( TaskHandle_t xTask ) {
@@ -76,7 +79,7 @@ eTaskState eTaskGetState( TaskHandle_t xTask ) {
 }
 
 void vTaskPrioritySet( TaskHandle_t xTask, UBaseType_t uxNewPriority ) {
-	OS_schedule_change_task_prio((TCB_t *)xTask, (TaskPrio_t)uxNewPriority);
+	return OS_schedule_change_task_prio((TCB_t *)xTask, (TaskPrio_t)uxNewPriority);
 }
 
 void vTaskSuspend( TaskHandle_t xTaskToSuspend ) {
@@ -124,7 +127,7 @@ UBaseType_t uxTaskGetNumberOfTasks( void ) {
 }
 
 char *pcTaskGetTaskName( TaskHandle_t xTaskToQuery ) {
-	return OS_task_get_name((TCB_t*)xTaskToQuery);
+	return OS_task_get_name(((TCB_t*)xTaskToQuery)->tid);
 }
 
 UBaseType_t uxTaskGetStackHighWaterMark( TaskHandle_t xTask ) {
@@ -138,15 +141,21 @@ uint8_t* pxTaskGetStackStart( TaskHandle_t xTask) {
 }
 
 void vTaskSetThreadLocalStoragePointer( TaskHandle_t xTaskToSet, BaseType_t xIndex, void *pvValue ) {
-	configASSERT(0 == 1);	
+	configASSERT(0 == 1);
 }
 
 void *pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery, BaseType_t xIndex ) {
-	return OS_task_get_TLS_ptr((TCB_t *)(xTaskToQuery), xIndex);
+	if(xTaskToQuery == NULL){
+		return OS_task_get_TLS_ptr(OS_CURRENT_TASK, xIndex);
+	}
+	return OS_task_get_TLS_ptr(((TCB_t *)(xTaskToQuery))->tid, xIndex);
 }
 
 void vTaskSetThreadLocalStoragePointerAndDelCallback( TaskHandle_t xTaskToSet, BaseType_t xIndex, void *pvValue, TlsDeleteCallbackFunction_t pvDelCallback){
-	OS_task_set_TLS_ptr((TCB_t *)xTaskToSet, xIndex, pvValue, pvDelCallback);
+	if(xTaskToSet == NULL) {
+		return OS_task_set_TLS_ptr(OS_CURRENT_TASK, xIndex, pvValue, pvDelCallback);
+	}
+	OS_task_set_TLS_ptr(((TCB_t *)xTaskToSet)->tid, xIndex, pvValue, pvDelCallback);
 }
 
 BaseType_t xTaskCallApplicationTaskHook( TaskHandle_t xTask, void *pvParameter ) {
@@ -279,7 +288,7 @@ UBaseType_t uxTaskGetTaskNumber( TaskHandle_t xTask ) {
 }
 
 BaseType_t xTaskGetAffinity( TaskHandle_t xTask ) {
-	return OS_task_get_core_ID((TCB_t *)xTask);
+	return OS_task_get_core_ID(((TCB_t *)xTask)->tid);
 }
 
 void vTaskSetTaskNumber( TaskHandle_t xTask, const UBaseType_t uxHandle ) {

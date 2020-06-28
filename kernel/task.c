@@ -36,12 +36,16 @@ privileged Vs unprivileged linkage and placement. */
 * TASK CRITICAL STATE VARIABLES
 *******************************************************************************/
 
+/* Maps index representing a task ID (tid) to its corresponding tcb */
 PRIVILEGED_DATA static volatile TCB_t ** OS_tid_table = NULL;
 
+/* The current maximum capacity of the tid table */
 PRIVILEGED_DATA static volatile int OS_tid_table_size = 0;
 
-PRIVILEGED_DATA static volatile int OS_num_tasks = 0;
+/* A counter of how many tasks have ever been created. Never decremented */
+PRIVILEGED_DATA static volatile int OS_task_counter = 0;
 
+/* Mutex for controling global task status events such as the tid table */
 PRIVILEGED_DATA static portMUX_TYPE OS_task_mutex = portMUX_INITIALIZER_UNLOCKED;
 
 
@@ -86,7 +90,7 @@ static void _OS_task_init_tid(TCB_t *task_tcb);
 *******************************************************************************/
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
-            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, int *task_tid)
+            TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, Tid_t *task_tid)
 {
     TCB_t *task_tcb;
     StackType_t *task_stack = NULL;
@@ -139,9 +143,6 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
     return OS_NO_ERROR;
 }
 
-
-    
-
 /*******************************************************************************
 * OS Task Delete
 *
@@ -160,13 +161,15 @@ int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task
 * NOTES: 
 *******************************************************************************/
 
-int OS_task_delete(TCB_t *tcb)
+int OS_task_delete(Tid_t tid)
 {
     int ret_val;
+    TCB_t *tcb;
 
-    /* We will assume the current task is to be removed if the tcb is null */
-    if(tcb == NULL){
-        tcb = OS_schedule_get_current_tcb();
+    /* Determine which tcb is to be deleted */
+    tcb = OS_task_get_tcb(tid);
+    if(tcb == NULL) {
+        return OS_ERROR_INVALID_TID;
     }
 
     /* Cannot delete the IDLE task */
@@ -199,9 +202,12 @@ int OS_task_delete(TCB_t *tcb)
 * NOTES: 
 *******************************************************************************/
 
-int OS_task_join(TCB_t *tcb, TickType_t timeout)
+int OS_task_join(Tid_t tid, TickType_t timeout)
 {
-    assert(tcb);
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    if(tcb == NULL) {
+        return OS_ERROR_INVALID_TID;
+    }
 
     int ret_val;
     TCB_t *waiter = OS_schedule_get_current_tcb();
@@ -232,11 +238,10 @@ int OS_task_join(TCB_t *tcb, TickType_t timeout)
 * NOTES: 
 *******************************************************************************/
 
-char * OS_task_get_name(TCB_t *tcb)
+char * OS_task_get_name(Tid_t tid)
 {
-    if(tcb == NULL){
-        tcb = OS_schedule_get_current_tcb();
-    }
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    assert(tcb);
     return &(tcb->task_name[0]);
 }
 
@@ -256,11 +261,10 @@ char * OS_task_get_name(TCB_t *tcb)
 * NOTES: 
 *******************************************************************************/
 
-int OS_task_get_core_ID(TCB_t *tcb)
+int OS_task_get_core_ID(Tid_t tid)
 {
-    if(tcb == NULL){
-        tcb = OS_schedule_get_current_tcb();
-    }
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    assert(tcb);
     return tcb->core_ID;
 }
 
@@ -280,11 +284,10 @@ int OS_task_get_core_ID(TCB_t *tcb)
 * NOTES: 
 *******************************************************************************/
 
-TaskPrio_t OS_task_get_priority(TCB_t *tcb)
+TaskPrio_t OS_task_get_priority(Tid_t tid)
 {
-    if(tcb == NULL){
-        tcb = OS_schedule_get_current_tcb();
-    }
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    assert(tcb);
     return tcb->priority;
 }
 
@@ -304,15 +307,13 @@ TaskPrio_t OS_task_get_priority(TCB_t *tcb)
 * NOTES: 
 *******************************************************************************/
 
-void *OS_task_get_TLS_ptr(TCB_t *tcb, int index)
+void *OS_task_get_TLS_ptr(Tid_t tid, int index)
 {
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    assert(tcb);
     if(index >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) {
         return NULL;
     } 
-    if(tcb == NULL) {
-        tcb = OS_schedule_get_current_tcb();
-    }
-    assert(tcb);
     return tcb->TLS_table[index];
 }
 
@@ -335,12 +336,11 @@ void *OS_task_get_TLS_ptr(TCB_t *tcb, int index)
 *******************************************************************************/
 
 /* TODO: make the indexing smarter one day... */
-void OS_task_set_TLS_ptr(TCB_t *tcb, int index, 
+void OS_task_set_TLS_ptr(Tid_t tid, int index, 
         void *value, TLSPtrDeleteCallback_t callback)
 {
-    if(tcb == NULL) {
-        tcb = OS_schedule_get_current_tcb();
-    }
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    assert(tcb);
 
     if(index < configNUM_THREAD_LOCAL_STORAGE_POINTERS) {
         portENTER_CRITICAL(&(tcb->task_state_mux));
@@ -366,8 +366,13 @@ void OS_task_set_TLS_ptr(TCB_t *tcb, int index,
 * NOTES: 
 *******************************************************************************/
 
-int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data)
+int OS_task_send_msg(Tid_t tid, TickType_t timeout, const void * const data)
 {
+    TCB_t *tcb = OS_task_get_tcb(tid);
+    if(tcb == NULL){
+        return OS_ERROR_INVALID_TID;
+    }
+
     int ret_val;
     if(tcb->msg_queue.max_messages <= 0) {
         return OS_ERROR_NO_TASK_QUEUE;
@@ -421,8 +426,14 @@ int OS_task_receive_msg(TickType_t timeout, void ** data)
 * NOTES: 
 *******************************************************************************/
 
-TCB_t * OS_task_get_tcb(int tid)
+TCB_t * OS_task_get_tcb(Tid_t tid)
 {
+    if(tid >= OS_task_counter || tid < OS_CURRENT_TASK) {
+        return NULL;
+    }
+    if(tid == OS_CURRENT_TASK){
+       return OS_schedule_get_current_tcb(); 
+    }
     return OS_tid_table[tid];
 }
 
@@ -551,12 +562,12 @@ static void _OS_task_init_tid(TCB_t *task_tcb)
         OS_tid_table = calloc(OS_TID_TABLE_INITIAL_SIZE, sizeof(TCB_t *));
         OS_tid_table_size = OS_TID_TABLE_INITIAL_SIZE;
     }
-    else if(OS_tid_table_size == OS_num_tasks){
+    else if(OS_tid_table_size == OS_task_counter){
         OS_tid_table_size *= 2;
         realloc(OS_tid_table, OS_tid_table_size * sizeof(TCB_t *));
     }
-    task_tcb->tid = OS_num_tasks;
+    task_tcb->tid = OS_task_counter;
     OS_tid_table[task_tcb->tid] = task_tcb;
-    ++OS_num_tasks;
+    ++OS_task_counter;
 }
 

@@ -10,6 +10,25 @@
 #include "msg_queue.h"
 #include "list.h"
 
+
+/*******************************************************************************
+* MACROS
+*******************************************************************************/
+
+#define OS_TID_TABLE_INITIAL_SIZE 64
+
+#define CORE_NO_AFFINITY INT_MAX
+
+#define OS_STACK_FILL_BYTE	( 0xa5U )
+
+#define OS_MAX_TASK_NAME 32
+
+#define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
+#define OS_IDLE_PRIORITY (uint8_t)0
+#define OS_IDLE_NAME ((const char* const)"IDLE")
+
+#define OS_CURRENT_TASK (Tid_t)-1
+
 /*******************************************************************************
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
@@ -61,7 +80,7 @@ struct OSTaskControlBlock
     xMPU_SETTINGS MPU_settings;
 
     /* The task's ID */
-    int tid;
+    Tid_t tid;
 
     /* Set to OS_TRUE if the task was statically allocated and doesn't require freeing */
     OSBool_t is_static;
@@ -119,47 +138,29 @@ struct OSTaskControlBlock
 };
 
 /*******************************************************************************
-* MACROS
-*******************************************************************************/
-
-#define OS_TID_TABLE_INITIAL_SIZE 64
-
-#define CORE_NO_AFFINITY INT_MAX
-
-#define OS_STACK_FILL_BYTE	( 0xa5U )
-
-#define OS_MAX_TASK_NAME 32
-
-#define OS_IDLE_STACK_SIZE configIDLE_TASK_STACK_SIZE
-#define OS_IDLE_PRIORITY (uint8_t)0
-#define OS_IDLE_NAME ((const char* const)"IDLE")
-
-#define OS_CURRENT_TASK (TaskPrio_t)-1
-
-/*******************************************************************************
 * FUNCTION HEADERS
 *******************************************************************************/
 
 int OS_task_create(TaskFunc_t task_func, void *task_arg, const char * const task_name, 
             TaskPrio_t prio, int stack_size, int msg_queue_size, int core_ID, int *tid);
 
-int OS_task_delete(TCB_t *tcb);
+int OS_task_delete(Tid_t tid);
 
-int OS_task_join(TCB_t *tcb, TickType_t timeout);
+int OS_task_join(Tid_t tid, TickType_t timeout);
 
-char * OS_task_get_name(TCB_t *tcb);
+char * OS_task_get_name(Tid_t tid);
 
-int OS_task_get_core_ID(TCB_t *tcb);
+int OS_task_get_core_ID(Tid_t tid);
 
-TaskPrio_t OS_task_get_priority(TCB_t *tcb);
+TaskPrio_t OS_task_get_priority(Tid_t tid);
 
-void *OS_task_get_TLS_ptr(TCB_t *tcb, int index);
+void *OS_task_get_TLS_ptr(Tid_t tid, int index);
 
-void OS_task_set_TLS_ptr(TCB_t *tcb, int index, void *value, TLSPtrDeleteCallback_t callback);
+void OS_task_set_TLS_ptr(Tid_t tid, int index, void *value, TLSPtrDeleteCallback_t callback);
 
-TCB_t * OS_task_get_tcb(int tid);
+TCB_t * OS_task_get_tcb(Tid_t tid);
 
-int OS_task_send_msg(TCB_t *tcb, TickType_t timeout, const void * const data);
+int OS_task_send_msg(Tid_t tid, TickType_t timeout, const void * const data);
 
 int OS_task_receive_msg(TickType_t timeout, void ** data);
 
