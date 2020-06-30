@@ -653,7 +653,7 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
     }
 
     /* Remove the task from any resource waitlists it is on */
-    if(old_tcb->waitlist != NULL) {
+    if(old_tcb->block_record.waitlist != NULL) {
         _OS_waitlist_remove(old_tcb);
     }
 
@@ -700,10 +700,9 @@ int OS_schedule_remove_task(TCB_t *old_tcb)
 * NOTES: 
 *******************************************************************************/
 
-int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
+int OS_schedule_delay_task(TCB_t *tcb, TickType_t tick_delay)
 {
     int i;
-    TickType_t wakeup_time;
 
     /* Scheduler must be running in order to delay a task */
     if(OS_scheduler_running == OS_FALSE) {
@@ -730,11 +729,28 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
             _OS_ready_list_remove(tcb);
             break;
         case OS_TASK_STATE_DELAYED:
-            portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_DELAYED_TASK;
+            _OS_delayed_list_remove(tcb);
+
+            /* This task is blocked and is getting delayed/suspended for the first time */
+            if(tcb->is_blocked == OS_TRUE && tcb->block_record.timeout_remaining == 0) {
+                tcb->block_record.timeout_remaining = tcb->delay_wakeup_time - OS_tick_counter;
+                /* This value will get added to when we calculate the delay */
+                tcb->delay_wakeup_time = OS_tick_counter;
+                _OS_waitlist_remove(tcb);
+            }
+
+            /* This task has no existing delays but still is blocked with a timeout*/
+            else if(tcb->block_record.waitlist != NULL) {
+                /* This value will get added to when we calculate the delay */
+                tcb->delay_wakeup_time = OS_tick_counter;
+                tick_delay = tcb->block_record.timeout_remaining;
+                tcb->block_record.timeout_remaining = 0;
+            }
+
+            break; 
         case OS_TASK_STATE_SUSPENDED:
             portEXIT_CRITICAL(&OS_schedule_mutex);
-            return OS_ERROR_SUSPENDED_TASK;
+            return OS_NO_ERROR;
         case OS_TASK_STATE_PENDING_DELETION:
             portEXIT_CRITICAL(&OS_schedule_mutex);
             return OS_ERROR_DELETED_TASK;
@@ -752,11 +768,17 @@ int OS_schedule_delay_task(TCB_t *tcb, const TickType_t tick_delay)
 		( void ) uxListRemove( &( tcb->xEventListItem ) );
 	}
 
-    /* Add to a list of delayed tasks */
+    /* Add to a list of delayed tasks, or stack the delay if already delayed */
     if(tick_delay != OS_NO_TIMEOUT){
-        tcb->task_state = OS_TASK_STATE_DELAYED;
-        wakeup_time = tick_delay + OS_tick_counter;
-        tcb->delay_wakeup_time = wakeup_time;
+        /* If already delayed, increase the delay */
+        if(tcb->task_state == OS_TASK_STATE_DELAYED){
+            tcb->delay_wakeup_time += tick_delay;
+        }
+        /* This is the first time this task has been delayed */
+        else {
+            tcb->task_state = OS_TASK_STATE_DELAYED;
+            tcb->delay_wakeup_time = tick_delay + OS_tick_counter;
+        }
         _OS_delayed_list_insert(tcb);
     }
     /* Add to the list of suspended tasks */
@@ -953,7 +975,7 @@ OSBool_t OS_schedule_process_tick(void)
         }
 
         /* Remove the task from a waiting list if it is on one */
-        if(OS_delayed_list.head_ptr->waitlist != NULL){
+        if(OS_delayed_list.head_ptr->block_record.waitlist != NULL){
             _OS_waitlist_remove(OS_delayed_list.head_ptr);
         }
 

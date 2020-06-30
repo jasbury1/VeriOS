@@ -109,10 +109,9 @@ struct OSTaskControlBlock
     TCB_t *next_ptr;
     TCB_t *prev_ptr;
 
-    /* Data for if the task is in a waiting list */
-    TCB_t *waitlist_next_ptr;
-    TCB_t *waitlist_prev_ptr;
-    WaitList_t *waitlist;
+    /* Data for if the task is blocked for accessing a resource */
+    OSBool_t is_blocked;
+    BlockRecord_t block_record;
 
     /* Tasks waiting on this task to die */
     WaitList_t *join_waitlist;

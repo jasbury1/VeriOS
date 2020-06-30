@@ -41,41 +41,41 @@ void _OS_waitlist_append(TCB_t *tcb, WaitList_t *waitlist)
 
     /* Update the task counter for this delayed list */
     waitlist->num_tasks++;
-    tcb->waitlist = waitlist;
+    tcb->block_record.waitlist = waitlist;
 
     /* First entry in the waitlist */
     if(waitlist->head_ptr == NULL) {
         waitlist->head_ptr = tcb;
         waitlist->tail_ptr = tcb;
-        tcb->waitlist_next_ptr = NULL;
-        tcb->waitlist_prev_ptr = NULL;
+        tcb->block_record.waitlist_next_ptr = NULL;
+        tcb->block_record.waitlist_prev_ptr = NULL;
         return;
     }
     /* This task will be the next to have resource access */
     if(waitlist->head_ptr->priority < tcb->priority) {
-        tcb->waitlist_next_ptr = waitlist->head_ptr;
-        tcb->waitlist_prev_ptr = NULL;
+        tcb->block_record.waitlist_next_ptr = waitlist->head_ptr;
+        tcb->block_record.waitlist_prev_ptr = NULL;
         waitlist->head_ptr = tcb;
         return;
     }
     /* This task will be the last to get resource access */
     if(waitlist->tail_ptr->priority >= tcb->priority){
-        tcb->waitlist_next_ptr = NULL;
-        tcb->waitlist_prev_ptr = waitlist->tail_ptr;
-        waitlist->tail_ptr->waitlist_next_ptr = tcb;
+        tcb->block_record.waitlist_next_ptr = NULL;
+        tcb->block_record.waitlist_prev_ptr = waitlist->tail_ptr;
+        waitlist->tail_ptr->block_record.waitlist_next_ptr = tcb;
         waitlist->tail_ptr = tcb;
         return;
     }
     /* Add to the middle of the waitlist in prioity order */
     tcb2 = waitlist->head_ptr;
-    tcb1 = tcb2->waitlist_next_ptr;
+    tcb1 = tcb2->block_record.waitlist_next_ptr;
     while(tcb1->priority >= tcb->priority){
         tcb2 = tcb1;
-        tcb1 = tcb1->waitlist_next_ptr;
+        tcb1 = tcb1->block_record.waitlist_next_ptr;
     }
-    tcb2->waitlist_next_ptr = tcb;
-    tcb->waitlist_prev_ptr = tcb2;
-    tcb->waitlist_next_ptr = tcb1;
+    tcb2->block_record.waitlist_next_ptr = tcb;
+    tcb->block_record.waitlist_prev_ptr = tcb2;
+    tcb->block_record.waitlist_next_ptr = tcb1;
 }
 
 /*******************************************************************************
@@ -97,7 +97,7 @@ void _OS_waitlist_append(TCB_t *tcb, WaitList_t *waitlist)
 
 void _OS_waitlist_remove(TCB_t *tcb)
 {
-    WaitList_t *waitlist = tcb->waitlist;
+    WaitList_t *waitlist = tcb->block_record.waitlist;
     assert(waitlist);
     
     /* Removing the only task */
@@ -107,25 +107,25 @@ void _OS_waitlist_remove(TCB_t *tcb)
     }
     /* Removing the head */
     else if(tcb == waitlist->head_ptr){
-        waitlist->head_ptr = tcb->waitlist_next_ptr;
-        waitlist->head_ptr->waitlist_prev_ptr = NULL;
+        waitlist->head_ptr = tcb->block_record.waitlist_next_ptr;
+        waitlist->head_ptr->block_record.waitlist_prev_ptr = NULL;
     }
     /* Removing the tail */
     else if(tcb == waitlist->tail_ptr){
-        waitlist->tail_ptr = tcb->waitlist_prev_ptr;
-        waitlist->tail_ptr->waitlist_next_ptr = NULL;
+        waitlist->tail_ptr = tcb->block_record.waitlist_prev_ptr;
+        waitlist->tail_ptr->block_record.waitlist_next_ptr = NULL;
     }
     /* Removing in the middle */
     else {
         configASSERT(waitlist->num_tasks > 2);
-        tcb->waitlist_next_ptr->waitlist_prev_ptr = tcb->waitlist_prev_ptr;
-        tcb->waitlist_prev_ptr->waitlist_next_ptr = tcb->waitlist_next_ptr;
+        tcb->block_record.waitlist_next_ptr->block_record.waitlist_prev_ptr = tcb->block_record.waitlist_prev_ptr;
+        tcb->block_record.waitlist_prev_ptr->block_record.waitlist_next_ptr = tcb->block_record.waitlist_next_ptr;
     }
 
     waitlist->num_tasks--;
-    tcb->waitlist_next_ptr = NULL;
-    tcb->waitlist_prev_ptr = NULL;
-    tcb->waitlist = NULL;
+    tcb->block_record.waitlist_next_ptr = NULL;
+    tcb->block_record.waitlist_prev_ptr = NULL;
+    tcb->block_record.waitlist = NULL;
 }
 
 /*******************************************************************************
@@ -159,13 +159,13 @@ TCB_t * _OS_waitlist_pop_head(WaitList_t *waitlist)
         waitlist->num_tasks = 0;
     }
     else {
-        waitlist->head_ptr = waitlist->head_ptr->waitlist_next_ptr;
+        waitlist->head_ptr = waitlist->head_ptr->block_record.waitlist_next_ptr;
         waitlist->num_tasks--;
     }
     /* This task is no longer on a waitlist */
-    head->waitlist = NULL;
-    head->waitlist_next_ptr = NULL;
-    head->waitlist_prev_ptr = NULL;
+    head->block_record.waitlist = NULL;
+    head->block_record.waitlist_next_ptr = NULL;
+    head->block_record.waitlist_prev_ptr = NULL;
 
     return head;
 }

@@ -495,10 +495,12 @@ static void _OS_task_init_tcb(TCB_t *tcb, const char * const task_name, TaskPrio
     tcb->next_ptr = NULL;
     tcb->prev_ptr = NULL;
 
-    /* Initialize waitlist data to null for now */
-    tcb->waitlist = NULL;
-    tcb->waitlist_next_ptr = NULL;
-    tcb->waitlist_prev_ptr = NULL;
+    /* Initialize waitlist/blocking data */
+    tcb->is_blocked = OS_FALSE;
+    tcb->block_record.timeout_remaining = 0;
+    tcb->block_record.waitlist = NULL;
+    tcb->block_record.waitlist_next_ptr = NULL;
+    tcb->block_record.waitlist_prev_ptr = NULL;
 
     /* Initialize join waitlist to null for now */
     tcb->join_waitlist = NULL;

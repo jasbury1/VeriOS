@@ -194,7 +194,6 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
     TCB_t *waiting_receiver = NULL;
-    OSBool_t timeout_set = OS_FALSE;
 
     assert(msg_queue);
     assert(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
@@ -212,6 +211,8 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
             
             if (new_message == NULL)
             {
+                portEXIT_CRITICAL(&(msg_queue->mux));
+                sender->is_blocked = OS_FALSE;
                 return OS_ERROR_MSG_POOL_RETR;
             }
 
@@ -232,7 +233,7 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
                 /* Schedule the task that was waiting on a new message */
                 OS_schedule_resume_task(waiting_receiver);
             }
-
+            sender->is_blocked = OS_FALSE;
             return OS_NO_ERROR;
         }
 
@@ -241,12 +242,14 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
         /* The queue was destroyed */
         if(msg_queue == NULL) {
             portEXIT_CRITICAL(&(msg_queue->mux));
+            sender->is_blocked = OS_FALSE;
             return OS_ERROR_RESOURCE_DESTROYED;
         }
 
         /* The timeout already went off, but we were unable to find queue room */
-        if(timeout_set == OS_TRUE) {
+        if(sender->is_blocked == OS_TRUE) {
             portEXIT_CRITICAL(&(msg_queue->mux));
+            sender->is_blocked = OS_FALSE;
             return OS_ERROR_QUEUE_FULL;
         }
 
@@ -255,23 +258,12 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
         
         portEXIT_CRITICAL(&(msg_queue->mux));
 
-        /* If the task is in the ready list, it must be unscheduled and blocked */
-        if(sender->task_state != OS_TASK_STATE_DELAYED && sender->task_state != OS_TASK_STATE_SUSPENDED) {
-            if(timeout == portMAX_DELAY){
-                OS_schedule_suspend_task(sender);
-            }
-            else {
-                timeout_set = OS_TRUE;
-                OS_schedule_delay_task(sender, timeout);
-            }
-        }
-        /* Yielding didn't happen implicitely when suspending or delaying */
-        else {
-            portYIELD_WITHIN_API();
-        }
-    }
-    return OS_NO_ERROR;
+        sender->is_blocked = OS_TRUE;
+        OS_schedule_delay_task(sender, timeout);
 
+    }
+    sender->is_blocked = OS_FALSE;
+    return OS_NO_ERROR;
 }
 
 /*******************************************************************************
@@ -299,7 +291,6 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 *******************************************************************************/
 int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** data)
 {
-    OSBool_t timeout_set = OS_FALSE;
     Message_t *retrieved_message = NULL;
     TCB_t *receiver = OS_schedule_get_current_tcb();
     TCB_t *waiting_sender = NULL;
@@ -331,6 +322,7 @@ int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** dat
                 OS_schedule_resume_task(waiting_sender);
             }
             *data = msg_contents;
+            receiver->is_blocked = OS_FALSE;
             return OS_NO_ERROR;
         }
 
@@ -340,13 +332,15 @@ int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** dat
         if(msg_queue == NULL){
             portEXIT_CRITICAL(&(msg_queue->mux));
             *data = NULL;
+            receiver->is_blocked = OS_FALSE;
             return OS_ERROR_RESOURCE_DESTROYED;
         }
 
         /* The timeout expired */
-        if(timeout_set == OS_TRUE) {
+        if(receiver->is_blocked == OS_TRUE) {
             portEXIT_CRITICAL(&(msg_queue->mux));
             *data = NULL;
+            receiver->is_blocked = OS_FALSE;
             return OS_ERROR_TIMER_EXPIRED;
         }
 
@@ -355,21 +349,10 @@ int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** dat
         
         portEXIT_CRITICAL(&(msg_queue->mux));
 
-        /* If the task is in the ready list, it must be unscheduled and blocked */
-        if(receiver->task_state != OS_TASK_STATE_DELAYED && receiver->task_state != OS_TASK_STATE_SUSPENDED) {
-            if(timeout == portMAX_DELAY){
-                OS_schedule_suspend_task(receiver);
-            }
-            else {
-                timeout_set = OS_TRUE;
-                OS_schedule_delay_task(receiver, timeout);
-            }
-        }
-        /* Yielding didn't happen implicitely when suspending or delaying */
-        else {
-            portYIELD_WITHIN_API();
-        }
+        receiver->is_blocked = OS_TRUE;
+        OS_schedule_delay_task(receiver, timeout);
     }
+    receiver->is_blocked = OS_FALSE;
     return OS_NO_ERROR;
 }
 
