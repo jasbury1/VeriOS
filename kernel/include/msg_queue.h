@@ -13,6 +13,9 @@
 * TYPEDEFS AND DATA STRUCTURES
 *******************************************************************************/
 
+/* The handle for application usage */
+typedef void * MsgQueue_t;
+
 typedef struct OSMessage Message_t;
 
 struct OSMessage {
@@ -45,16 +48,16 @@ typedef struct OSMessagePool {
 * FUNCTION HEADERS
 *******************************************************************************/
 
-int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data);
+int OS_msg_queue_send(MsgQueue_t queue, TickType_t timeout, const void * const data);
 
-int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** msg);
+int OS_msg_queue_receive(MsgQueue_t queue, TickType_t timeout, void ** msg);
 
-void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size);
+void _OS_msg_queue_init(MessageQueue_t * queue, int queue_size);
 
-int OS_msg_queue_create(void ** queue_ptr, int queue_size);
+int OS_msg_queue_create(MsgQueue_t * queue_ptr, int queue_size);
 
-int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data);
+int OS_msg_queue_try_send(MsgQueue_t queue, const void * const data);
 
-int OS_msg_queue_try_receive(MessageQueue_t *msg_queue, void ** data);
+int OS_msg_queue_try_receive(MsgQueue_t queue, void ** data);
 
 #endif /* OS_MSG_QUEUE_H */

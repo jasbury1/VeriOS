@@ -38,9 +38,7 @@ PRIVILEGED_DATA static portMUX_TYPE OS_message_mutex = portMUX_INITIALIZER_UNLOC
 * STATIC FUNCTION DECLARATIONS
 *******************************************************************************/
 
-static void _OS_msg_queue_waitlist_init(WaitList_t *list);
-
-static Message_t* _OS_msg_pool_retrieve(void);
+static Message_t * _OS_msg_pool_retrieve(void);
 
 static void _OS_msg_pool_insert(Message_t *msg);
 
@@ -49,40 +47,9 @@ static void _OS_msg_queue_insert(MessageQueue_t *msg_queue, Message_t *msg);
 static Message_t * _OS_msg_queue_pop(MessageQueue_t *msg_queue);
 
 /*******************************************************************************
-* OS Message Queue Init
+* Message Queue Create (API FUNCTION)
 *
-*   msg_queue = 
-*   queue_size = 
-* 
-* PURPOSE : 
-*   
-* 
-* RETURN :
-*   
-*
-* NOTES: 
-*******************************************************************************/
-
-/* TODO: Maybe this becomes static at some point and we have another method
-    for initializing task IPC data */
-void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size)
-{
-    msg_queue->num_messages = 0;
-    msg_queue->max_messages = queue_size;
-    msg_queue->head_ptr = NULL;
-    msg_queue->tail_ptr = NULL;
-
-    _OS_msg_queue_waitlist_init(&(msg_queue->reveive_waiters));
-    _OS_msg_queue_waitlist_init(&(msg_queue->send_waiters));
-
-    vPortCPUInitializeMutex(&msg_queue->mux);
-
-}
-
-/*******************************************************************************
-* OS Message Queue Init
-*
-*   queue_ptr = Double pointer to the queue itself
+*   queue_ptr = A reference to the pointer where the queue will be allocated
 *   queue_size = The maximum number of messages the queue should hold 
 * 
 * PURPOSE :
@@ -92,11 +59,12 @@ void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size)
 * 
 * RETURN :
 *   
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occurred
 *
 * NOTES: 
 *******************************************************************************/
 
-int OS_msg_queue_create(void ** queue_ptr, int queue_size)
+int OS_msg_queue_create(MsgQueue_t * queue_ptr, int queue_size)
 {
     MessageQueue_t *msg_queue = NULL;
 
@@ -116,15 +84,15 @@ int OS_msg_queue_create(void ** queue_ptr, int queue_size)
 
     _OS_msg_queue_init(msg_queue, queue_size);
     
-    *queue_ptr = msg_queue;
+    *queue_ptr = (void *)msg_queue;
 
     return OS_NO_ERROR;
 }
 
 /*******************************************************************************
-* OS Message Queue Delete
+* Message Queue Delete (API FUNCTION)
 *
-*   msg_queue = a pointer to the msg queue to delete
+*   queue = The reference to the message queue to delete
 * 
 * PURPOSE : 
 *  
@@ -133,16 +101,19 @@ int OS_msg_queue_create(void ** queue_ptr, int queue_size)
 * 
 * RETURN :
 *   
-*   Returns an error code or 0 (OS_NO_ERROR) if no error occured
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occurred
 *
 * NOTES: 
 *******************************************************************************/
 
-int OS_msg_queue_delete(MessageQueue_t *msg_queue)
+int OS_msg_queue_delete(MsgQueue_t queue)
 {
-    assert(msg_queue);
-
+    MessageQueue_t *msg_queue = (MessageQueue_t *)queue;
     Message_t *retrieved_message;
+
+    if(msg_queue == NULL) {
+        return OS_ERROR_INVALID_QUEUE;
+    }
 
     portENTER_CRITICAL(&(msg_queue->mux));
     OS_schedule_waitlist_empty(&(msg_queue->reveive_waiters));
@@ -163,9 +134,9 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 }
 
 /*******************************************************************************
-* OS Message Queue Post
+* Message Queue Send (API FUNCTION)
 *
-*   msg_queue = A pointer to the message queue to send the message to
+*   queue = The reference to the message queue to send the message to
 *   timeout = Max amount of time to wait if the queue is full
 *   data = A pointer to the data the message is carrying. Usually allocated
 * 
@@ -179,24 +150,23 @@ int OS_msg_queue_delete(MessageQueue_t *msg_queue)
 * 
 * RETURN :
 *
-*   Return an error message or 0 (OS_NO_ERROR) if no error occured   
+*   Return an error message or 0 (OS_NO_ERROR) if no error occurred   
 *
 * NOTES: 
 *
-*   If the timeout is equal to the max delay time, the task will be suspended
-*   and assumed to have no timeout
-*   If the sending tasks block, it is up to the next task that reads from the
-*   queue to unblock the next waiting task
+*   Use OS_NO_TIMEOUT as the timeout if this call should not have a timeout
 *******************************************************************************/
 
-int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void * const data)
+int OS_msg_queue_send(MsgQueue_t queue, TickType_t timeout, const void * const data)
 {
+    MessageQueue_t *msg_queue = (MessageQueue_t *)queue;
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
     TCB_t *waiting_receiver = NULL;
 
-    assert(msg_queue);
-    assert(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+    if(msg_queue == NULL) {
+        return OS_ERROR_INVALID_QUEUE;
+    }
 
     while (OS_TRUE) {
         portENTER_CRITICAL(&(msg_queue->mux));
@@ -267,9 +237,9 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 }
 
 /*******************************************************************************
-* OS Message Queue Pend
+* Message Queue Receive (API FUNCTION)
 *
-*   msg_queue = The message queue to read from
+*   _queue = The referemce to the message queue to read from
 *   timeout = The amount of time to wait for a message if the queue is empty
 * 
 * PURPOSE : 
@@ -278,24 +248,31 @@ int OS_msg_queue_post(MessageQueue_t *msg_queue, TickType_t timeout, const void 
 *   will block if the queue is empty and the task will be placed in a waiting list.
 *   If a timeout is specified and the task times out before a message is added in the
 *   queue, the task will be removed from the waitlist and rescheduled without reading
-*   any message.   
+*   any message.  
+*   The data pointer is filled with the data or set to NULL if no data could be
+*   retrieved before the timeout expired
 * 
 * RETURN :
 *
-*   Returns a void pointer to the data read from the message. Returns a NULL ptr
-*   if it the queue remained empty for the duration of the timeout   
+*   Returns an error code or 0 (OS_NO_ERROR) if no error occurred
 *
 * NOTES: 
 *
-*   Use portMAX_DELAY as the timeout if this call should not time out
+*   Use OS_NO_TIMEOUT as the timeout if this call should not time out
 *******************************************************************************/
-int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** data)
+
+int OS_msg_queue_receive(MsgQueue_t queue, TickType_t timeout, void ** data)
 {
+    MessageQueue_t * msg_queue = (MessageQueue_t *)queue;
     Message_t *retrieved_message = NULL;
     TCB_t *receiver = OS_schedule_get_current_tcb();
     TCB_t *waiting_sender = NULL;
 
     void *msg_contents;
+
+    if(msg_queue == NULL) {
+        return OS_ERROR_INVALID_QUEUE;
+    }
 
     while(OS_TRUE) {
         portENTER_CRITICAL(&(msg_queue->mux));
@@ -357,13 +334,15 @@ int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** dat
 }
 
 /*******************************************************************************
-* OS Message Queue Try Send
+* Message Queue Try Send (API FUNCTION)
 *
-*   msg_queue = A pointer to the message queue to send the message to
+*   queue = A reference to the message queue to send the message to
 *   data = A pointer to the data the message is carrying. Usually allocated 
 * 
 * PURPOSE : 
-*   
+*
+*   Another API call for writing a message to a message queue. This function
+*   will NOT block if the queue is full and will instead return immediately.
 * 
 * RETURN :
 *
@@ -374,17 +353,19 @@ int OS_msg_queue_pend(MessageQueue_t *msg_queue, TickType_t timeout, void ** dat
 * NOTES:
 *
 *   This function is non-blocking and will not wait to send a message if the
-*   queue is full. Use OS_msg_queue_post for the blocking equivalent
+*   queue is full. Use OS_msg_queue_send for the blocking equivalent
 *******************************************************************************/
 
-int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
+int OS_msg_queue_try_send(MsgQueue_t queue, const void * const data)
 {
+    MessageQueue_t * msg_queue = (MessageQueue_t *)queue;
     Message_t *new_message = NULL;
     TCB_t *sender = OS_schedule_get_current_tcb();
     TCB_t *waiting_receiver = NULL;
 
-    assert(msg_queue);
-    assert(sender->task_state == OS_TASK_STATE_RUNNING || sender->task_state == OS_TASK_STATE_READY);
+    if(msg_queue == NULL) {
+        return OS_ERROR_INVALID_QUEUE;
+    }
 
     portENTER_CRITICAL(&(msg_queue->mux));
     
@@ -427,12 +408,17 @@ int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
 }
 
 /*******************************************************************************
-* OS Message Queue Try Reveive
+* Message Queue Try Reveive (API FUNCTION)
 *
-*   msg_queue = The message queue to read from
+*   queue = A reference to the message queue to read from
+*   data = A double pointer that will be filled with the data retrieved
 * 
 * PURPOSE : 
-*   
+*
+*   Another API call for reading a message from a message queue. This function
+*   will NOT block if the queue is empty and will instead return immediately.
+*   The data pointer is filled with the data or set to NULL if no data could be
+*   retrieved  
 * 
 * RETURN :
 *
@@ -442,15 +428,20 @@ int OS_msg_queue_try_send(MessageQueue_t *msg_queue, const void * const data)
 * NOTES:
 *
 *   This function is non-blocking and will not wait to read a message if the
-*   queue is empty. Use OS_msg_queue_pend for the blocking equivalent
+*   queue is empty. Use OS_msg_queue_receive for the blocking equivalent
 *******************************************************************************/
 
-int OS_msg_queue_try_receive(MessageQueue_t *msg_queue, void ** data)
+int OS_msg_queue_try_receive(MsgQueue_t queue, void ** data)
 {
+    MessageQueue_t *msg_queue = (MessageQueue_t *)queue;
     Message_t *retrieved_message = NULL;
     TCB_t *waiting_sender = NULL;
 
     void *msg_contents;
+
+    if(msg_queue == NULL) {
+        return OS_ERROR_INVALID_QUEUE;
+    }
 
     portENTER_CRITICAL(&(msg_queue->mux));
 
@@ -485,15 +476,38 @@ int OS_msg_queue_try_receive(MessageQueue_t *msg_queue, void ** data)
 }
 
 /*******************************************************************************
-* STATIC FUNCTION DEFINITIONS
+* OS Message Queue Init
+*
+*   msg_queue = A reference to the message queue to be initialized
+*   queue_size = The maximum capacity of the message queue
+* 
+* PURPOSE : 
+*   
+*   Initializes the data members in a message queue
+* 
+* RETURN :
+*   
+*
+* NOTES: 
 *******************************************************************************/
 
-static void _OS_msg_queue_waitlist_init(WaitList_t *list)
+void _OS_msg_queue_init(MessageQueue_t *msg_queue, int queue_size)
 {
-    list->head_ptr = NULL;
-    list->tail_ptr = NULL;
-    list->num_tasks = 0;
+    msg_queue->num_messages = 0;
+    msg_queue->max_messages = queue_size;
+    msg_queue->head_ptr = NULL;
+    msg_queue->tail_ptr = NULL;
+
+    _OS_list_header_init(&(msg_queue->reveive_waiters));
+    _OS_list_header_init(&(msg_queue->send_waiters));
+
+    vPortCPUInitializeMutex(&msg_queue->mux);
+
 }
+
+/*******************************************************************************
+* STATIC FUNCTION DEFINITIONS
+*******************************************************************************/
 
 static void _OS_msg_pool_insert(Message_t *msg)
 {
